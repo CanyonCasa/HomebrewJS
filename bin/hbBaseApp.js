@@ -89,30 +89,47 @@ Site.prototype.start = function start() {
     this.xApp.use(bodyParser.urlencoded({ extended: true }));
     // basic site initialization middleware...
     this.xApp.use(function init(rqst,rply,next){
+      //self.scribe.trace("init handler chain...");
       // apply any global and site specific static headers...
-      for (var h of cfg.headers) rply.set(h,cfg.headers[h]);
+      for (var h in cfg.headers) rply.set(h,cfg.headers[h]);
       next(); // proceed to next middleware
       });
     // site-specific configured handlers
     cfg.handlers.forEach(function(handler) { self.use(handler); });
     // throw default error if this point reached since no handler replied
-    this.xApp.use(function(rqst,rply,next){next(cfg.error ? cfg.error.code||500 : 404);});
+    this.xApp.use(function(rqst,rply,next){
+      var code = cfg.error ? cfg.error.code||500 : 404;
+      self.scribe.trace("Throw default error: ",code);
+      next(code);
+      });
     // add error handler...
     if (cfg.error && cfg.error.handler) {
+      self.scribe.debug("Loading config specified error handler...");
       self.use(cfg.error.handler);
       }
     else {  // default error handler...
+      self.scribe.debug("Using default error handler...");
       var selfScribe = this.scribe;
       this.xApp.use(
-        function defaultErrorHandler(err,rqst,rply,next){
-          if (typeof err=='object') {
-            rply.status(Number(err.code)||500).json(err);
-            selfScribe.warn('ERROR[%s]: %s',err.code,JSON.stringify(err));
+        function defaultErrorHandler(err,rqst,rply,next) {
+          if (err instanceof Object) {
+            if (err.code) {
+              // homebrew error {code: #, msg:'prompt'}...
+              selfScribe.warn('HOMEBREW INTERNAL ERROR[%s]: %s',err.code,err.msg);
+              rply.status(err.code).send('HOMEBREW INTERNAL ERROR: ' + err.asJx());
+              } 
+            else {
+              // JavaScript/Node error...
+              selfScribe.error('ERROR: %s %s (see transcript)',err.toString()||'?', err.stack.split('\n')[1].trim());
+              selfScribe.dump(err.stack);
+              rply.status(500).send('INTERNAL SERVER ERROR: 500');
+              };
             }
           else {
-            var code = err in errMsgs ? err : 500;
-            rply.status(code).send('ERROR[' + code + ']: ' + errMsgs[code]);
-            selfScribe.warn('ERROR[%s]: %s',code,errMsgs[code]);
+            var code = Number(err) in errMsgs ? Number(err) : 500;
+            var msg = errMsgs[code];
+            selfScribe.warn('*ERROR[%s]: %s',code,msg);
+            rply.status(code).send('ERROR[' + code + ']: ' + msg);
             };
           }
         );

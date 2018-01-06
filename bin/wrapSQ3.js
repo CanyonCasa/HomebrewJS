@@ -513,24 +513,45 @@ WrapSQ3.prototype.setDefinition = function setDefinition (definition, callback) 
 
 // convenience method to indirectly get a recipe definition...
 WrapSQ3.prototype.lookup = function lookup (recipeName, callback) {
-  this.getDefinition({section:'RECIPE',key:recipeName},callback);
+  this.getDefinition({section:'RECIPE',key:recipeName},
+    function (err,def){
+      if (err || def.action!='FOUND') return callback(err,{});
+      callback(null,def.value);
+      }
+    );
   return this.db;
   };
 
 // convenience method to retrieve data based on a recipe
-WrapSQ3.prototype.find = function find(recipe, params, callback) {
-  // assume dirty params, so clean them
-  var [dirt,laundry] = laundromat.scrub(params,recipe.soap);
-  if (dirt) return callback(dirt, laundry); // i.e. dirt == error
-  // sort the laundry for ordered params; or use laundry as named params
-  recipe.params = recipe.order ? laundromat.sort(laundry, recipe.order) : laundry;
-  // recipe now has complete query of sql, params, and flags
-  this.sql(recipe, function(err,data) {
-    if (err) return callback(err, {});
-    // restore JSON objects
-    for (var j of recipe.json) { data[j] = JSON.parse(data[j]); };
-    callback(null,data);
-    });
+WrapSQ3.prototype.find = function find(recipeName, params, callback) {
+  var data = {params:params};
+  var self = this;
+  this.lookup(recipeName, 
+    function (err, recipe) {
+      data.err = err;
+      data.recipe = recipe;
+      if (err) return callback(err, data);
+      // assume dirty params, so clean them
+      console.log("scrub: ", params, recipe);
+      console.log("scrub: ", params, recipe.soap);
+      [data.err,data.clean] = laundromat.scrub(params,recipe.soap);
+      if (data.err) return callback(err, data);
+      // sort the clean laundry for ordered params; or use clean laundry as named params
+      data.recipe.params = recipe.params = recipe.order ? laundromat.sort(data.clean, recipe.order) : data.clean;
+      // recipe now has complete query of sql, params, and flags
+      self.sql(recipe, 
+        function(err,result) {
+          data.err = err;
+          data.raw = result;
+          if (err) return callback(err, data);
+          // restore JSON objects
+          for (var j of recipe.json) { result[j] = JSON.parse(result[j]); };
+          data.query = result;
+          callback(null,data);
+          }
+        )
+      }
+    );
   };
 
 // convenience method to store data based on a recipe

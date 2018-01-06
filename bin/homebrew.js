@@ -22,7 +22,6 @@ var VERSION = '1.00';
 require('./Extensions2JS');  // my additions to JS language
 const WrapSQ3 = require('./WrapSQ3');  // SQLite3 database wrapper
 
-
 // read the server configuration from a [cmdline specified] JS or JSON file or use default...
 var cfgFile = process.argv[2] || '../restricted/config';
 var cfg = require(cfgFile);
@@ -66,8 +65,8 @@ for (var s of cfg.sites) {
   if (!cfg.sites[s].active) continue;
   scribe.info("Loading site definition[%s]...",s);
   // merge any global headers with local site headers, local headers given precedence...
-  cfg.headers = mergekeys({"x-powered-by": "Raspberry Pi Homebrew NodeJS Server "+VERSION},cfg.headers);
-  cfg.sites[s].headers = mergekeys(cfg.headers, cfg.sites[s].headers);
+  cfg.headers.mergekeys({"x-powered-by": "Raspberry Pi Homebrew NodeJS Server "+VERSION});
+  cfg.sites[s].headers.mergekeys(cfg.headers);
   // define app for site... create, start, run optional test...
   cfg.sites[s].tag = cfg.sites[s].tag || s; // default tag to index value
   cfg.sites[s].db = cfg.db; // pass shared database connections
@@ -91,6 +90,9 @@ for (var p of cfg.proxies) {
   for (var tag of cfg.proxies[p].sites) {
     if (tag in cfg.sites&& cfg.sites[tag].active) {
       var route = cfg.sites[tag].host+':'+cfg.sites[tag].port;
+      // add primary route and aliases
+      cfg.proxies[p].routes[tag] = route;
+      scribe.debug("Proxy[%s] route added: %s --> %s",p,tag,route);
       for (var alias of cfg.sites[tag].aliases) {
         cfg.proxies[p].routes[alias] = route;
         scribe.debug("Proxy[%s] route added: %s --> %s",p,alias,route);

@@ -24,7 +24,7 @@ module.exports = Proxy = function Proxy(cfg) {
   cfg.scribe = cfg.scribe || {};
   cfg.scribe.tag = cfg.scribe.tag || cfg.tag;
   this.scribe = new Scribe(cfg.scribe);  // start transcripting ...
-  this.hits = 0;
+  this.probes = 0;
   this.cfg = cfg;
   this.scribe.trace("PROXY[v%s] tagged '%s' on port %s...",VERSION,cfg.tag,cfg.port);
   this.scribe.dump("PROXY CFG: %s",JSON.stringify(cfg.proxy,null,2));
@@ -64,23 +64,25 @@ Proxy.prototype.router = function router() {
 
   return function (rqst, rply) {
     var route = self.cfg.routes[rqst.headers.host] || '';
+    var ip = rqst.headers['x-forwarded-for']||rqst.connection.remoteAddress||'?';
     if (route) { 
-      self.scribe.debug("PROXY[%s->%s]: %s %s", rqst.connection.remoteAddress, rqst.headers.host, rqst.method, rqst.url);
+      self.scribe.debug("PROXY[%s->%s]: %s %s", ip, rqst.headers.host, rqst.method, rqst.url);
       self.proxy.web(rqst, rply, {target: route});
       }
     else {
-      if (ip.match('192.168.0')) {
-        self.scribe.debug("NO PROXY ROUTE %s->%s: %s", rqst.connection.remoteAddress, rqst.headers.host, rqst.url);
+      rply.writeHead(404, {"Content-Type": "text/plain"});
+      rply.write("404 Proxy Route Not Found\n");
+      if (ip.match('192.168.0')) {  // local diagnostics
+        self.scribe.debug("NO PROXY ROUTE %s->%s: %s", ip, rqst.headers.host, rqst.url);
         for (var r of self.cfg.routes) {
           self.scribe.trace("  ROUTE[%s]: %s", r, self.cfg.routes[r]);
+          rply.write("  ROUTE["+r+"]: "+self.cfg.routes[r]+"\n");
           };
         }
       else {
-        self.hits += 1;
-        self.scribe.warn("NO PROXY ROUTE[%d] %s->%s: %s", self.hits, ip, rqst.headers.host, rqst.url);
+        self.probes += 1;
+        self.scribe.warn("NO PROXY ROUTE[%d] %s->%s: %s", self.probes, ip, rqst.headers.host, rqst.url);
         };
-      rply.writeHead(404, {"Content-Type": "text/plain"});
-      rply.write("404 Proxy Route Not Found\n");
       rply.end();
       };
     };

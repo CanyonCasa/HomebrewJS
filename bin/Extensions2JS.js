@@ -12,19 +12,15 @@ Object.prototype[Symbol.iterator] = function () {
   var keys = Object.keys(this); var index = 0;
   return { next: () => index<keys.length ? {value: keys[index++], done: false} : {done: true} };
 }
-global.mergekeys = function mergekeys(base,merged) {
-  var newObj = {};
-  for (var key of base) { newObj[key] = base[key]; };
-  if (merged) { for (var key of merged) { newObj[key] = merged[key]; }; };
-  return newObj;
-}
-// functions below work, but break "for (var key in ObjX)" loops
-//Object.prototype.mergekeys = function (mergedObj) {
-//  var baseObj = this;
-//  if (mergedObj) { for (var key of mergedObj) { baseObj[key] = mergedObj[key]; }; };
-//  return baseObj;
-//}
-//Object.prototype.asJSON = function (pretty) { return (JSON.stringify(this,null,pretty?2:0)); };
+// following done as prototype definitions to force non-enumerable to not break "for in" loops
+Object.defineProperty(Object.prototype,'mergekeys', {
+  value: function(merged) {for (var key of Object.keys(merged||{})) { this[key] = merged[key]; }; return this; },
+  enumerable: false
+})
+Object.defineProperty(Object.prototype,'asJx', {
+  value: function(pretty) { return (JSON.stringify(this,null,pretty?2:0)); },
+  enumerable: false
+})
 
 
 ///************************************************************
@@ -51,7 +47,16 @@ String.prototype.toRegExp = function() {
   var flags = str.indexOf('/')==0 ? str.slice(str.lastIndexOf('/')+1) : '';
   return new RegExp(pat,flags);
 }
-//String.prototype.toJSON = function (reviver) { return (JSON.parse(this.slice(),reviver)); };
+String.prototype.asJx = function (reviver) { 
+  var temp = {};
+  try {temp=JSON.parse(this.slice(),reviver)} catch (e) {}; 
+  return temp;
+}
+String.prototype.part = function (regex,dflt,index) {
+  var str = this.slice();
+  var mx = str.match(regex);
+  return mx ? mx[index||0] : dflt;
+}
 
 
 ///************************************************************

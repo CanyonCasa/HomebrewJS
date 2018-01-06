@@ -22,6 +22,7 @@ exports = module.exports = Static = function Static(options) {
   
   // this function called by express app for each page request...
   return function staticMiddleware(rqst, rply, next) {
+    //scribe.trace('static...');
     if (rqst.method=='GET') {
       var filename;
       // assume page may be predefined/modified by earlier middleware
@@ -68,5 +69,6 @@ exports = module.exports = Static = function Static(options) {
     else {
       next();
       };
+    //scribe.trace('static exit...');
     };
   };

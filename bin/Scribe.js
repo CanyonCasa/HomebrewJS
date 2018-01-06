@@ -12,7 +12,8 @@ const frmt = require('util').format;  // returns same result as console.log for 
 require('./Extensions2JS');
 
 // precedence order of transcript calls...
-const levels = ["all","dump","trace","debug","log","info","warn","error","fatal"];
+// assume 'dump' always only to transcript
+const levels = ["dump","all","trace","debug","log","info","warn","error","fatal"];
 
 // color styling function...
 function asStyle (style, txt) {
@@ -77,7 +78,7 @@ Scribe.prototype.write = function write(style,msg) {
   if (levels.indexOf(style)>=levels.indexOf(this.level)) {
     console.log(asStyle(style,[stamp,level,tag,msg].join(' ')));
     };
-  if (levels.indexOf(style)>=levels.indexOf(this.transcript.level)) {
+  if (levels.indexOf(style)>=levels.indexOf(this.transcript.level) || style=='dump') {
     this.streamToLog([stamp,level,tag,'::',msg].join(' ')+'\n',(style==='fatal'));  
     };
   };

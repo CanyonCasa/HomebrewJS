@@ -29,6 +29,7 @@ var cleansers = {
   email: /^[a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+.[a-zA-Z]{2,4}$/,
   hex: /^[a-fA-F0-9]+$/,
   identifier: /^[a-z_$][\w$]{0,63}$/,
+  integer: /^\d+$/,
   phone: /^(\+[\d ]+)?([\d]{3})[-. ]?([\d]{3})[-. ]?([\d]{4})$/,
   password: /^(?=.*\d)(?=.*[A-Z])(?=.*[a-z])(?=.*[\W_]).{8,}$/,
   selector: /[a-z][\w\-]*/i,
@@ -37,7 +38,8 @@ var cleansers = {
   tag: /<([\/!])?([a-z0-9-]+)([^>]*)>/im,
   url: /^(?:(http|https|ftp|file):\/\/)*([\w.-]*[^\/])*(\.*\/[\w+$!*().\/?&=%;:@-]*)/,
   urlLocal: /^(\.*\/[\w+$!*().\/?&=%;:@-]*)/,
-  user: /^[a-z0-9_-]{3,16}$/,
+  username: /^[\w]{3,32}$/,
+  word: /[\w]+/,
   words: /[\w\s]+/,
   zip: /^[0-9]{5}(?:-[0-9]{4})?$/
   };
@@ -139,6 +141,9 @@ function wash(data,soap){
     case '': return mod||''; break;            // returns '' or a forced value from default
     case 'boolean':                             // returns only true or false
       return (data===true||data===false)?data:(mod==true);
+      break;
+    case 'integer':                             // returns a valid number or default or 0
+      return (isNaN(data)) ? parseInt(mod||0) : parseInt(data); // "exceptions" to isNaN previously screened
       break;
     case 'numeric':                             // returns a valid number or default or 0
       return (isNaN(data)) ? parseFloat(mod||0) : parseFloat(data); // "exceptions" to isNaN previously screened
@@ -245,8 +250,8 @@ function sanitize(html,disinfectant,done) {
   };
 
 function scrub(data,soap,done) {
-  var dataType= typeof data!='object' ? 'scalar' : Array.isArray(data) ? 'array' : 'object';
-  var soapType= typeof soap!='object' ? 'scalar' : Array.isArray(soap) ? 'array' : 'object';
+  var dataType = typeof data!='object' ? 'scalar' : Array.isArray(data) ? 'array' : 'object';
+  var soapType = typeof soap!='object' ? 'scalar' : Array.isArray(soap) ? 'array' : 'object';
   var cleanData = soapType=='object' ? {} : soapType=='array' ? [] : undefined;
   var error = null;
   if (dataType!=soapType) {
