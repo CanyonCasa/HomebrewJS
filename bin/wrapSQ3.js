@@ -1,12 +1,12 @@
 ﻿/*
-Copyright (C) 2016 Enchanted Engineering
+Copyright (C) 2018 Enchanted Engineering
 
 module to wrap communications to an SQLite database ...
 
 Example...
 var WrapSQ3 = require('./WrapSQ3');
 
-var db = new WrapSQ3({file:'test.sq3'});
+var db = new WrapSQ3({file:'test.sq3',log:'STDOUT'});
 
 db.sql(query,callback);
 
@@ -33,16 +33,14 @@ query releated...
   *                                             // retrieve an INI-like definition, default return sent definition
   *sql(query, callback);                        // query contains sql statement, params, flags; results passed to callback
   *sqlEach(query,rowCB,finalCB);                // iterative query, row results passed to rowCB, finalCB called after last row
-  *lookup(recipeName, callback);                // look up a recipe in definitions used for storing and finding data
-  *find(recipe,callback);                       // automatically retrieve data using the query defined by the recipe
-  *store(recipe,callback);                      // automatically save data according to the query found in recipe 
-
+  *lookup(item, callback);                      // look up an item in definitions used for storing and finding data
+  *find(recipe,data,callback);                  // get content from database based on recipe and (param) data.
+  *store(recipe,data,callback);                  // store content in database based on recipe and (body) data.
+  
 internal helper related
   quote(str);                                   // escape ' for safe SQL strings
   printableQuery(query, parameters);            // substitutes parameters into a parameterized query for transcripting
   *reduce(queryRows, flags);                    // reduces a SELECT query to minimal form
-external helper related
-  laundromat.js module                          // data cleaning module
 
 
 BINDINGS...
@@ -63,13 +61,12 @@ test.each({sql:"SELECT * from tests"},(r)=>{console.log(r);});
 // ************************************************************
 // CODE DEFINITION BEGINS...
 // ************************************************************
-require('./Extensions2JS'); // load date format function used by backup
+require('./Extensions2JS');
 const fs = require('fs');
 const format = require('util').format;
 const path = require('path');
 const sqlite3 = require('sqlite3'); // sqlite3 bindings...
-const laundromat = require('./Laundromat');
-
+const Safe = require('./SafeJSON');
 
 // ************************************************************
 // HELPER METHODS...
@@ -128,7 +125,7 @@ function printableQuery(query) {
 //        (if both "id" and "tag" exist, "tag" takes precedence over "id".)
 //   6. An empty query returns {} (or [] for flags:{ordered:true}.)
 function reduce(rows,flags) {
-  if (!(flags.simplify===undefined||flags.simplify)) return rows;
+  if (!(flags.simplify===undefined||flags.simplify)||rows===undefined) return rows;
   var rslt;
   switch (rows.length) {
     case 0:   // empty result
@@ -193,33 +190,21 @@ function reduce(rows,flags) {
 // constructor to encapsulate and initialize the database communications...
 // cfg defines database filename (default in memory) and optional mode
 module.exports = WrapSQ3 = function WrapSQ3(cfg, callback) {
-  // check database filename and define logfile and logDB...
-  cfg.file = cfg.file || ':memory:';  // default to memory based database.
-  if (!cfg.log) {
-    if (cfg.file!=':memory:') {
-      var parts = path.parse(cfg.file);
-      cfg.log = parts.dir+path.sep+parts.name;
-      }
-    else {
-      cfg.log = 'memory';
-      };
-    cfg.log+=(new Date().style('stamp'))+'.log';
-    };
-  // set default database mode
-  cfg.mode = cfg.mode || (sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE);
-  this.cfg = cfg;     // save database connection params as part of instance.
-  var self = this;    // define a local scope reference for callback
+  // check database filename and define log file and db instance...
+  this.cfg = {};
+  this.cfg.file = cfg.file || ':memory:';  // default to memory based database.
+  this.cfg.log = cfg.log || ((cfg.file==':memory:') ? 'memory.log' : 'WrapSQ3.log');
+  this.cfg.mode = cfg.mode || (sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE);  // set default database mode
+  this.cfg.verbose = cfg.verbose;
   if (cfg.verbose) sqlite3.verbose();  // enable traceback debug support
+  var self = this;    // define a local scope reference for callback
   // open the connection ...
-  this.db = new sqlite3.Database(cfg.file,cfg.mode,
+  this.db = new sqlite3.Database(this.cfg.file,this.cfg.mode,
     function(err) {
-      if (err) {
-        if (callback) callback("-- WRAPSQ3 OPEN ERROR["+self.cfg.file+"]: "+err.toString());
-        }
-      else {
-        self.logger("-- WRAPSQ3 OPEN SUCCESS["+self.cfg.file+"]");
-        if (callback) callback();
-        };
+      var msg = (err) ? "-- WRAPSQ3 OPEN ERROR["+self.cfg.file+"]: "+err.toString() :
+        "-- WRAPSQ3 OPEN SUCCESS["+self.cfg.file+"]"
+      self.logger(msg);
+      if (callback) { callback(err,msg) };
       }
     );
   };
@@ -233,20 +218,26 @@ WrapSQ3.prototype.close = function close(callback) {
 WrapSQ3.prototype.logger = function logger(flag, msgObj) {
   msgObj = msgObj || flag;  // if only one argument, assumes its the message
   var msg = ((typeof msgObj=='string') ? msgObj : (flag in msgObj) ? msgObj[flag] : printableQuery(msgObj))+'\n';
-  fs.appendFile(this.cfg.log,msg, 
-    function(err) {
-      if (err) { console.log("WrapSQ3 module: Problem writing to "+this.cfg.log+"!"); };
-      }
-    );
+  if (this.cfg.log==='STDOUT') {
+    console.log(msg);
+    } 
+  else {
+    var logFile = this.cfg.log;
+    fs.appendFile(this.cfg.log,msg, 
+      function(err) {
+        if (err) { console.log("WrapSQ3 module: Problem writing to "+logFile+"!"); };
+        }
+      );
+    };
   };
 
 // create a backup of the database to given filename,or timestamped derivative by default...
 WrapSQ3.prototype.backup = function backup(filename,callback) {
-  var stamp = new Date().format('.yyyymmdd_HHMMss');
-  filename = filename || (this.cfg.file+stamp);
+  var stamp = (new Date().getTime()/1000).toFixed(0);
+  filename = filename || (this.cfg.file+'.bak'+stamp);
   try {
     fs.createReadStream(this.cfg.file).pipe(fs.createWriteStream(filename));
-    this.logger("-- BACKUP of database to "+filename);
+    this.logger("-- BACKUP of database to "+filename+" successful!");
     if (callback) { callback(null,filename); };
     } 
   catch(e) { 
@@ -258,7 +249,6 @@ WrapSQ3.prototype.backup = function backup(filename,callback) {
 
 // retrieves database structure schema, or table specific schema.
 WrapSQ3.prototype.getSchema = function (table,callback) {
-  this.i = (this.i) ? this.i+1 : 1;
   if (arguments.length==1) { callback=table; table=''; }; // correct for optional table
   if (table) {
     this.db.all("SELECT * from sqlite_master WHERE type='table' and name=?",[table],callback);
@@ -286,9 +276,9 @@ WrapSQ3.prototype.getTables = function getTables(callback) {
   return this;
   };
 
-// test existence of table and makes callback(err,name) based an existance, err=true if not found
+// test existence of table and makes callback(name) or callback(null) based an existance
 WrapSQ3.prototype.tableExists = function tableExists(name,callback) {
-  this.getTables(function (err,names) { callback(err||names.indexOf(name)==-1, name) });
+  this.getTables(function (err,names) { callback((!err&&names.indexOf(name)!=-1) ? name: null) });
   return this;
   };
 
@@ -313,14 +303,13 @@ WrapSQ3.prototype.sql = function sql (query, callback) {
   flags.ordered = ('ordered' in flags) ? flags.ordered : false;
   flags.log = (this.cfg.verbose) || ('log' in flags) ? flags.log :  undefined;
   callback = callback || this.nop;
-  var rslt = null;
   var action = query.sql.substr(0,query.sql.indexOf(' ')).toUpperCase();
   var self = this;
   if (action=='SELECT') {
     // transcript select queries only if verbose (debug)
     if (flags.log) self.logger(query);
     // select query...
-    if ('$id' in query.params) console.log("NAMED QUERY: \n",query);
+//    if ('$id' in query.params) console.log("NAMED QUERY: \n",query);
     self.db.all(query.sql,query.params,
       function(err,rows) {
         if (err) {
@@ -330,7 +319,7 @@ WrapSQ3.prototype.sql = function sql (query, callback) {
           }
         else {
           // SELECT response...
-          rslt = (flags.simplify) ? reduce(rows,flags) : rows; 
+          var rslt = (flags.simplify) ? reduce(rows,flags) : rows; 
           callback(null,rslt);  // select results
           }
         }
@@ -386,7 +375,7 @@ WrapSQ3.prototype.sequence = function serialize(actions) {
   };
 
 // convenience method to directly access database iteratively...
-// Assumes it peroforms a SELECT and does not log action.
+// Assumes it performs a SELECT and does not log action.
 // unlike WrapSQ3.sql it performs no simplification since it provides an intermediate callback
 // argument query:{sql:'sql_statement', params:[]}
 WrapSQ3.prototype.sqlEach = function sqlEach (query, rowCB, finalCB) {
@@ -423,13 +412,13 @@ WrapSQ3.prototype.getDefinition = function getDefinition (definition, callback) 
         // a single definition exists, fix value and return
         def.action = 'FOUND';
         def.jstr = def.value;
-        def.value = JSON.parse(def.value);
+        def.value = def.value.asJx();
         callback(null,def);
         }
       else if (Object.keys(def).length===0) {
         // does not exists, so return default (given definition)
         definition.action = 'DEFAULT';
-        definition.value = ('value' in definition) ? definition.value : undefined;  // force default
+        definition.value = ('dflt' in definition) ? definition.dflt : undefined;  // force default
         callback(null,definition);
         }      
       else {
@@ -457,7 +446,7 @@ WrapSQ3.prototype.setDefinition = function setDefinition (definition, callback) 
     return this.db;
     };
   // convert value to JSON string, and define defaults
-  definition.jstr = definition.jstr || JSON.stringify(definition.value||{});
+  definition.jstr = definition.jstr || (definition.value||{}).asJx();
   definition.error = null;
   // find out if definition exists
   var self = this;
@@ -511,75 +500,62 @@ WrapSQ3.prototype.setDefinition = function setDefinition (definition, callback) 
   return this;
   };
 
-// convenience method to indirectly get a recipe definition...
-WrapSQ3.prototype.lookup = function lookup (recipeName, callback) {
-  this.getDefinition({section:'RECIPE',key:recipeName},
+// convenience method to indirectly lookup a definition, from section LOOKUP by default...
+WrapSQ3.prototype.lookup = function lookup (item, callback) {
+  this.getDefinition((typeof item=='object') ? item : {section:'LOOKUP',key:item,dflt:{}},
     function (err,def){
-      if (err || def.action!='FOUND') return callback(err,{});
-      callback(null,def.value);
+      if (err) return callback(err,{});
+      if (def.action!=='FOUND') return callback(null,def.mergekeys({err:{code:404,msg:'LOOKUP NOT FOUND'}}));
+      callback(null,def);
       }
     );
   return this.db;
   };
 
-// convenience method to retrieve data based on a recipe
-WrapSQ3.prototype.find = function find(recipeName, params, callback) {
-  var data = {params:params};
-  var self = this;
-  this.lookup(recipeName, 
-    function (err, recipe) {
-      data.err = err;
-      data.recipe = recipe;
-      if (err) return callback(err, data);
-      // assume dirty params, so clean them
-      console.log("scrub: ", params, recipe);
-      console.log("scrub: ", params, recipe.soap);
-      [data.err,data.clean] = laundromat.scrub(params,recipe.soap);
-      if (data.err) return callback(err, data);
-      // sort the clean laundry for ordered params; or use clean laundry as named params
-      data.recipe.params = recipe.params = recipe.order ? laundromat.sort(data.clean, recipe.order) : data.clean;
-      // recipe now has complete query of sql, params, and flags
-      self.sql(recipe, 
-        function(err,result) {
-          data.err = err;
-          data.raw = result;
-          if (err) return callback(err, data);
-          // restore JSON objects
-          for (var j of recipe.json) { result[j] = JSON.parse(result[j]); };
-          data.query = result;
-          callback(null,data);
-          }
-        )
-      }
-    );
+// convenience method to perform filtered INSERT actions
+WrapSQ3.prototype.find = function find(recipe,data,callback) {
+  var thisDB = this;
+  // prep optional (tainted) params based on recipe...
+  recipe.safeParams = (recipe.filter) ? Safe.jsonSafe(data,recipe.filter) : data;
+  // order query params if necessary
+  recipe.params = (recipe.order) ? recipe.safeParams.orderBy(recipe.order) : recipe.safeParams;
+  // recipe now has complete query of sql, params, and flags
+  thisDB.sql(recipe, function(err,result) {
+    if (err) return callback(err);
+    // restore JSON fields - result could be an object or array of objects
+    if (Array.isArray(result)) {
+      for (let n=0;n<result.length;n+=1) {
+        for (let j of recipe.json||[]) { if (j in result[n]) result[n][j] = result[n][j].asJx(); };
+      };
+    }
+    else {
+      for (let j of recipe.json||[]) { if (j in result) result[j] = result[j].asJx(); };
+    };
+    // optional reduce after other processing
+    callback(null,recipe.reduce ? thisDB.reduce(result) : result);
+    });
   };
 
-// convenience method to store data based on a recipe
-WrapSQ3.prototype.store = function store(recipe, data, callback) {
-  // assume dirty data, so clean it
-  var [dirt,laundry] = laundromat.scrub(data,recipe.soap);
-  if (dirt) return callback(dirt, laundry); // i.e. dirt == error
-  // prep JSON objects
-  for (var j of recipe.json) { laundry[j] = JSON.stringify(laundry[j]); };
-  // sort the laundry for ordered params; or use laundry as named params
-  recipe.params = recipe.order ? laundromat.sort(laundry, recipe.order) : laundry;
-  // recipe now has complete query of sql, params, and flags
-  if (recipe.block) {
-    // assumes a block of INSERT actions and params being an array of arrays
-    recipe.meta = [];
-    this.db.serialize(function() {
-      var stmt = this.db.prepare(recipe.sql);
-      for (var i=0;i<recipe.params.length;i++) {
-        /// need to transcript?
-        stmt.run(recipe.params[i],function(err){recipe.meta.push(this.lastID)});
-        };
-      stmt.finalize(function(err){callback(err,recipe.meta);});
+// convenience method to retrieve authorized data
+WrapSQ3.prototype.store = function store(recipe,data,callback) {
+  var thisDB = this.db;
+  // always treat as a block of INSERT actions with data being an array of arrays or objects
+  if (!recipe.block) data = [data];
+  recipe.meta = []; // return metadata
+  thisDB.serialize(function() {
+    var stmt = thisDB.prepare(recipe.sql);
+      for (let d=0;d<data.length;d++) {
+      // filter data, translate JSON, and order params 
+      var px = (recipe.filter) ? Safe.jsonSafe(data[d],recipe.filter) : data[d];
+      for (let j of recipe.json||[]) { px[j] = px[j].asJx(recipe.pretty); };
+      px = (recipe.order) ? px.orderBy(recipe.order) : px;
+      stmt.run(px,function(err){
+        if (err) callback(err,px);
+        recipe.meta.push([this.lastID,this.changes]);  // lastID valid only for INSERT statements
+        });
+      };
+    stmt.finalize(function(err) {
+      callback(err,recipe.meta);
       });
-    } 
-  else {
-    this.sql(recipe, function(err,metadata) {
-      if (err) return callback(err, {});
-        callback(null,metadata);
-      });
-    };
+    });
   };

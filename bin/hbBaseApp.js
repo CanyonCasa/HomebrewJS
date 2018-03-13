@@ -1,13 +1,17 @@
 // module for a basic configurable website...
 
-// dependencies
-var express = require('express');
-var bodyParser = require('body-parser');
-var multer = require('multer'); // v1.0.5
-var upload = multer(); // for parsing multipart/form-data
-const crypto = require('crypto');
-const Scribe = require('./Scribe');
-const WrapSQ3 = require('./WrapSQ3');  // SQLite3 database wrapper
+// app and middleware dependencies
+const path = require('path');
+const express = require('express');
+const compression = require('compression');     // for compressing responses
+const cookies = require('cookie-parser');       // for cookies
+const bodyParser = require('body-parser');      // for JSON and urlencoded bodies
+const https = require('https');
+
+require('./Extensions2JS');
+const crypto = require('./CryptoPlus');
+const Scribe = require('./Scribe');             // transcripting
+const WrapSQ3 = require('./WrapSQ3');           // SQLite3 database wrapper
 
 const errMsgs = {
   400: "Bad Request",
@@ -17,122 +21,174 @@ const errMsgs = {
   500: "Internal Server Error"
   };
 
-var secret = function (key,hash,digest) {
-  hash = hash || 'sha256';
-  key = key || Math.random().toString(36).substr(4,16).toUpperCase();
-  digest = digest || 'hex';
-  return crypto.createHash(hash).update(key).digest(digest);
-  };
-
 // constructor for flexible site application based on user configuration...
-module.exports = Site = function Site(cfg) {
-  this.tag = cfg.tag;
-  // establish transcript parameters, or inherit global if not provided.
-  cfg.scribe = cfg.scribe || {tag:cfg.tag.toUpperCase()};
-  // use global scribe if same tag or create App spcific scribe.
-  this.scribe = cfg.scribe.tag===global.scribe.tag ? global.scribe : new Scribe(cfg.scribe);
-  // create a site specific secret
-  cfg.restricted = cfg.restricted || {};
-  cfg.restricted.secret = secret(cfg.restricted.key);
-  // load global and site databases...
-  cfg.db = cfg.db || {};
-  var dbDef = cfg.restricted.databases || {};
-  for (var d of dbDef) {
-    var dbCfg = typeof dbDef[d]=='object' ? dbDef[d] : { file: dbDef[d] };
-    cfg.db[d] = new WrapSQ3(dbCfg,function (err) { 
-      if (err) throw err; 
-      scribe.info("Database %s connected...", d); 
+module.exports = Site = function Site(context) {
+  // homebrew server level items under context keys: db, env, headers, internals, scribe, services 
+  // site specific configuration under context.site and context.tag;
+  // added middleware context keys include: xApp, as well as changes to db and site, and a site specific scribe
+  this.tag = context.tag;
+  this.scribe = new Scribe({tag: context.tag, parent: context.scribe}.mergekeys(context.site.scribe||{}));
+  // load server and site databases...
+  // context.db has any global database handles, if any defined!
+  // site context.site.databases holds local database definitions, which override global of same tag
+  for (var d of context.site.databases||{}) {
+    var db =(typeof context.site.databases[d]=='object') ? context.site.databases[d] : {file:context.site.databases[d]};
+    var dbScribe = this.scribe;
+    context.db[d] = new WrapSQ3(db,function (err,msg) {
+      if (err) { dbScribe.error(msg); throw err; } else { dbScribe.log(msg); };
       });
     };
-  // save the configuration and create the express app...
-  cfg.app.options = cfg.app.options || {};
-  this.cfg = cfg;
+  // create Express app instance and add settings and locals...
   this.xApp = express();
-  for (var key of cfg.app.options) this.xApp.set(key,cfg.app.options[key]);
-  if (process.env.NODE_ENV=='development') this.scribe.debug("Secret[%s]: %s", cfg.tag,cfg.restricted.secret);
+  for (var key of (context.site.x||{}).settings||{}) this.xApp.set(key,context.site.x.settings[key]);
+  for (let k in (context.site.x||{}).locals||{}) this.xApp.locals[k] = context.site.x.locals[k];
+  // save the context/configuration (without introducing another level of hierarchy)
+  for (let key of context) if (key!=='scribe') this[key] = context[key]; // but don't override site scribe
   };
 
-Site.prototype.use = function addHandler(handler) {
-  var site = {cfg: this.cfg, db: this.cfg.db, handler: handler, shared: this.cfg.shared, scribe: this.scribe, tag: this.tag, xApp: this.xApp};
+// Site level wrapper for app[method] calls...
+Site.prototype.addHandler = function (handler) {
+  var handlerContext = { // 'this' context for handlers
+    cfg: this.site, 
+    db: this.db,
+    env: this.env,
+    handler: handler,
+    internals: this.internals,
+    scribe: this.scribe, // site specific instance
+    services: this.services, 
+    tag: this.tag, 
+    xApp: this.xApp
+    };
   if (typeof handler === 'function') {
+    // essentially load built-in functions.
     this.xApp.use(handler);
-    this.scribe.log("Site[%s]: Added handler function '%s'",this.tag,handler.name);
+    this.scribe.log("Added handler function '%s'",handler.name);
     }
   else if (typeof handler === 'object') {
+    // load middleware...
+    let method = handler.method || 'use';  // set method, default to 'use'
+    handler.options = handler.options || {};
     if (handler.require) {
       // dynamically load code for handler
       var code = require(handler.require);
       // initialize code in correct context, which returns the xApp callback
-      this.xApp.use(code.call(site,handler.options));  
-      this.scribe.log("Site[%s]: Added handler '%s'",this.tag,handler.tag);
+      // include a path route argument if defined
+      if (handler.route) {
+        this.xApp[method](handler.route,code.call(handlerContext,handler.options));
+        this.scribe.log("Added handler '%s' using method '%s' and route '%s'",handler.tag,method,handler.route);
+        }        
+      else {
+        this.xApp[method](code.call(handlerContext,handler.options));  
+        this.scribe.log("Added handler '%s' using method '%s'",handler.tag,method);
+        };
+      }
+    else {
+      if (handler.tag=='static') {
+        var root = (handler.root!==undefined) ? handler.root : 'static';
+        root = path.isAbsolute(root) ? root : path.normalize(this.site.root + path.sep + root);
+        if (handler.route) {
+          this.xApp.use(handler.route,express.static(root,handler.options));
+          }
+        else {
+          this.xApp.use(express.static(root,handler.options));
+          };
+        this.scribe.log("Added handler 'express.%s' serving '%s'",handler.tag,root);
+        };
       };
     }
   else {
-      this.scribe.warn("Site[%s]: Unknown handler '%s'",this.tag,handler);
+      this.scribe.warn("Unknown handler '%s'",this.tag,handler);
     };
   };
   
-Site.prototype.listen = function listen() {
-  this.xApp.listen(this.cfg.port);
-  };
-
-Site.prototype.test = function test() {
-  if (process.env.NODE_ENV=='development') this.scribe.debug("Test Call: %s", this.cfg.tag);
+Site.prototype.test = function test(t) {
+  if (t && process.env.NODE_ENV=='development') this.scribe.debug("Test Call: %s", this.site.tag);
   };
 
 Site.prototype.start = function start() {
-  var cfg = this.cfg;
   var self = this;
-    // base support...
-    // for parsing body json and x-www-form-urlencoded data
-    this.xApp.use(bodyParser.json()); 
-    this.xApp.use(bodyParser.urlencoded({ extended: true }));
-    // basic site initialization middleware...
-    this.xApp.use(function init(rqst,rply,next){
-      //self.scribe.trace("init handler chain...");
-      // apply any global and site specific static headers...
-      for (var h in cfg.headers) rply.set(h,cfg.headers[h]);
-      next(); // proceed to next middleware
-      });
-    // site-specific configured handlers
-    cfg.handlers.forEach(function(handler) { self.use(handler); });
-    // throw default error if this point reached since no handler replied
-    this.xApp.use(function(rqst,rply,next){
-      var code = cfg.error ? cfg.error.code||500 : 404;
-      self.scribe.trace("Throw default error: ",code);
-      next(code);
-      });
-    // add error handler...
-    if (cfg.error && cfg.error.handler) {
-      self.scribe.debug("Loading config specified error handler...");
-      self.use(cfg.error.handler);
+  var opts = ((this.site||{}).app||{}).options||{};
+  // optional base support for compressing responses, cookies, parsing body json and x-www-form-urlencoded data
+  if (opts.compression) this.xApp.use(compression()); 
+  if (opts.cookies) this.xApp.use(cookies());
+  if (opts.json) this.xApp.use(bodyParser.json()); 
+  if (opts.url) this.xApp.use(bodyParser.urlencoded(opts.url));
+  // basic site initialization middleware...
+  this.scribe.trace("Initializing handler chain...");
+  this.xApp.use(function init(rqst,rply,next){
+    // apply any (global and site specific) static headers passed to site...
+    rqst.hb = {};
+    for (var h in this.headers) rply.set(h,this.headers[h]);
+    next(); // proceed to next middleware
+    });
+  if (opts.auth) {  // handle hbAuth internally so route is set correctly and at start of response chain
+    let hA = {tag: 'auth', require: './hbAuth', route: ['/user/:rqrd1/:rqrd2/:opt1?',''], options: opts.auth};
+    this.addHandler(hA);
+    };
+  // site-specific configured handlers
+  this.site.handlers.forEach((handler)=>{this.addHandler(handler);});
+  // handler to throw default error if this point reached since no handler replied
+  // skipped if a real error occurs prior
+  this.xApp.use(function(rqst,rply,next){  // catchall 
+    if (opts.redirect) {
+      let location = "https://"+rqst.hostname+rqst.originalUrl; 
+      self.scribe.debug("Secure redirect: %s ==> %s", rqst.url, location);
+      rply.redirect(location);      
       }
-    else {  // default error handler...
-      self.scribe.debug("Using default error handler...");
-      var selfScribe = this.scribe;
-      this.xApp.use(
-        function defaultErrorHandler(err,rqst,rply,next) {
-          if (err instanceof Object) {
-            if (err.code) {
-              // homebrew error {code: #, msg:'prompt'}...
-              selfScribe.warn('HOMEBREW INTERNAL ERROR[%s]: %s',err.code,err.msg);
-              rply.status(err.code).send('HOMEBREW INTERNAL ERROR: ' + err.asJx());
-              } 
-            else {
-              // JavaScript/Node error...
-              selfScribe.error('ERROR: %s %s (see transcript)',err.toString()||'?', err.stack.split('\n')[1].trim());
-              selfScribe.dump(err.stack);
-              rply.status(500).send('INTERNAL SERVER ERROR: 500');
-              };
-            }
-          else {
-            var code = Number(err) in errMsgs ? Number(err) : 500;
-            var msg = errMsgs[code];
-            selfScribe.warn('*ERROR[%s]: %s',code,msg);
-            rply.status(code).send('ERROR[' + code + ']: ' + msg);
+    else {
+      self.scribe.trace("Throw default 404 error");
+      next(404);
+      };
+    });
+  // add error handler...
+  if (self.site.errorHandler) { // custom site error handler...
+    self.addhandler(errorHandler);
+    }
+  else {  // default error handler...
+    self.scribe.debug("Using default error handler...");
+    this.xApp.use(
+      function defaultErrorHandler(err,rqst,rply,next) {
+        if (err instanceof Object) {
+          if (err.code) { // homebrew error {code: #, msg:'prompt'}...
+            err.msg = err.msg || err.toString();
+            self.scribe.warn('HOMEBREW INTERNAL ERROR[%s]: %s',err.code,err.msg);
+            self.internals.Stat.inc(self.tag,err.code);
+            rply.status(500).send('HOMEBREW INTERNAL ERROR['+err.code+']: '+err.msg);
+            } 
+          else {  // JavaScript/Node error...
+            self.scribe.error('ERROR: %s %s (see transcript)',err.toString()||'?', err.stack.split('\n')[1].trim());
+            self.internals.Stat.inc(self.tag,500);
+            self.scribe.dump(err.stack);
+            rply.status(500).send('INTERNAL SERVER ERROR: 500');
             };
           }
-        );
+        else {  // normal http service errors
+          var code = Number(err) in errMsgs ? Number(err) : 500;
+          self.scribe.warn('OOPS[%s: %s] ==> (%s->%s) %s %s', code, errMsgs[code], rqst.ip, rqst.hostname, 
+            rqst.method,rqst.originalUrl);
+          self.internals.Stat.inc(self.tag,code);
+          rply.status(code).send('OOPS[' + code + ']: ' + errMsgs[code]);
+          };
+        }
+      );
+    };
+  // start a server...
+  if ('secure' in this.site) {
+    let ssl = {};
+    for (let k in this.site.secure) {
+      try {
+        ssl[k] = fs.readFileSync(this.site.secure[k], 'utf8');
+        }
+      catch (e) {
+        this.scribe.error("Key/certificate file '%s' not found for secure proxy[%s]!",k, this.tag); 
+        this.scribe.fatal("Proxy '%s' creation failed!", this.site.tag);
+        };
       };
-  this.listen();
+    https.createServer(ssl, this.xApp).listen(this.site.port);  // https site
+    this.scribe.debug("HTTPS[%s:%s] server started for app '%s'", this.site.host, this.site.port, this.tag); 
+    }
+  else {
+    this.xApp.listen(this.site.port);                           // http site
+    this.scribe.debug("HTTP[%s:%s] server started for app '%s'", this.site.host, this.site.port, this.tag); 
+    };
   };

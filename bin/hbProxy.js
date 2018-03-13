@@ -1,88 +1,143 @@
 /*
-proxy.js: reverese proxy server for multi-domain home brew web server 
-created: 20161111 by dvcampbell, (c)2016 Enchanted Engineering, Tijeras NM.
+proxy.js: reverse proxy server for multi-domain homebrew web server 
+(c)2018 Enchanted Engineering, Tijeras NM.
 
-This script defines a reverse proxy server for a small multi-domain NodeJS 
-homebrew web hosting service. 
+proxy.js script defines a reverse proxy server for a small multi-domain NodeJS 
+homebrew web hosting service with custom routing logic that maps hostname to backend server.
+
+For secure proxies (i.e. https), under proxy configuration define key: 
+  {secure: {key: <path_to_key_file>, cert: <path_to_cert_file>}}
+  This module allows secrets to be updated (in the background) without stopping server (i.e. Let's Encrypt);
+  for now, assumes all hosts on same certificate!
 
 SYNTAX:
-  var Proxy = require('./proxy');
+  var Proxy = require('./hbProxy');
   var proxy = new Proxy(<proxy-config>);
   proxy.start([<callback>]);
 */ 
 
-
-var VERSION = '1.0';
-
 // load module dependencies...
 var http = require('http');
-var Scribe = require('./Scribe');
+var https = require('https');
 var httpProxy = require('http-proxy');
+const tls = require('tls');
 var fs = require('fs');                 // file system
+var url = require('url');
+var Scribe = require('./Scribe');
 
-module.exports = Proxy = function Proxy(cfg) {
-  cfg.scribe = cfg.scribe || {};
-  cfg.scribe.tag = cfg.scribe.tag || cfg.tag;
-  this.scribe = new Scribe(cfg.scribe);  // start transcripting ...
-  this.probes = 0;
-  this.cfg = cfg;
-  this.scribe.trace("PROXY[v%s] tagged '%s' on port %s...",VERSION,cfg.tag,cfg.port);
-  this.scribe.dump("PROXY CFG: %s",JSON.stringify(cfg.proxy,null,2));
-  this.scribe.log("Proxy %s routes initialized...", cfg.tag);
-  if (this.cfg.options.ssl) {
-    // secure server so load credentials...
-    // cfg.options.https points to public key and certificate files
-    // that must be replaced with contents before call to proxy
+module.exports = Proxy = function Proxy(context) {
+  this.context = context;
+  this.tag = context.tag;
+  this.cfg = context.cfg;
+  this.scribe = new Scribe({tag:context.tag, parent: context.scribe}.mergekeys(context.cfg.scribe||{}));
+  let ignore = (context.cfg.report||{}).ignore || ['192.168.0','127.0.0'];
+  this.ignore = (typeof ignore=='string') ? [ignore] : ignore;
+  // if secure server, configure it...
+  if ('secure' in context.cfg) this.initSecure(context.cfg.secure);
+  this.proxy = httpProxy.createServer(context.cfg.options||{});
+  this.scribe.info("PROXY[%s] initialized...",context.tag);
+  };
+
+Proxy.prototype.initSecure = function initSecure(cfg) {
+  this.secure = {};
+  this.loadSecrets(cfg.files); // occurs synchronously since files specified 
+  this.secure.options = {SNICallback: this.SNICallback()};
+  this.context.internals.Events.on(cfg.renew||this.tag,(action)=>{if (action==='renew') this.loadSecrets()});
+  return this.secure.options;
+  };
+
+// loads secure context files synchronously or asynchronously
+Proxy.prototype.loadSecrets = function (files) {
+  let secrets = {};
+  if (files!==undefined) {  // sync load
+    this.secure.files = files;
     try {
-      this.cfg.options.ssl.key = fs.readFileSync(this.cfg.options.ssl.key, 'utf8');
-      this.cfg.options.ssl.cert = fs.readFileSync(this.cfg.options.ssl.cert, 'utf8');
-      this.scribe.info("Proxy '%s' public key and certificate initialized...", cfg.tag);
+      for (var f in files) secrets[f] = fs.readFileSync(files[f], 'utf8');
       }
     catch (e) {
-      this.scribe.error("No key or certificate found for secure proxy '%s'!",cfg.tag); 
-      this.scribe.error("Proxy %s creation failed!", cfg.tag);
-      //process.gracefulExit(1);
+      this.scribe.error("Key/certificate file '%s' not found for secure proxy[%s]!",f, this.tag); 
+      this.scribe.fatal("Proxy '%s' creation failed!", this.tag);
       };
+    this.secure.secrets = secrets;
+    this.secure.changed = true;
+    this.scribe.trace("Key/certificate files loaded..."); 
+    }
+  else if (this.secure.files!==undefined) {  // async load
+    let list = Object.keys(this.secure.files);
+    var self = this;
+    function series(f) {
+      if (f) {
+        fs.readFile(self.secure.files[f],'utf8',(e,d)=> {
+          if (e) return self.scribe.error("Key/certificate file[%s] load error: %s",f,e); 
+          secrets[f] = d;
+          self.scribe.trace("Loaded Key/certificate file %s",f); 
+          series(list.shift());
+          });
+        }
+      else {    // finalize async
+        self.secure.secrets = secrets;
+        self.secure.changed = true;
+        self.scribe.info("Key/certificate files reloaded..."); 
+        };
+      };
+    series(list.shift());
+    }
+  else {
+    throw "Required proxy secrets files (key/cert) not defined!"
     };
-  this.proxy = httpProxy.createServer(this.cfg.options);
-  this.scribe.log("Proxy '%s' created...", cfg.tag);
+  };
+
+// default SNI callback for secure proxies
+Proxy.prototype.SNICallback = function SNICallback() {
+  var self = this;
+  return function SNICB(host,cb) {
+    if (self.secure.changed) {
+      self.secure.changed = false;
+      self.secure.context = tls.createSecureContext(self.secure.secrets);
+      self.scribe.debug("Secure Context updated...");
+      };
+    cb(null,self.secure.context);
+    };
   };
 
 // default generic reverse proxy callback...
 Proxy.prototype.router = function router() {
   var self = this;
-  self.proxy.on('error', function(err, rqst, rply) {
-    self.scribe.error("Trapped internal proxy exception![%s]: %s:%s", err.code, err.address, err.port);
+  this.proxy.on('error', (err) => {
+    self.scribe.error("Trapped internal proxy exception!:", err.toString());
+    self.context.internals.Stat.inc(self.tag,'ERROR');
     try {
       rply.writeHead(500);
       rply.end("Oops!, Server Error!");
+      self.scribe.dump("Returned proxy exception!: %s", err.toString());
       }
     catch (e) {
-      self.scribe.warn("Exception handling Proxy Exception![%s]: %s:%s", e.code, e.address, e.port);
+      self.scribe.warn("Exception handling Proxy Exception!: %s", e.toString());
       };
     });
+//  this.proxy.on('upgrade',(req,socket,head)=> {
+//    scribe.warn('upgrade: ',req.headers,req.url);
+//    self.proxy.ws(req,socket,head);
+//    });
 
-  return function (rqst, rply) {
-    var route = self.cfg.routes[rqst.headers.host] || '';
-    var ip = rqst.headers['x-forwarded-for']||rqst.connection.remoteAddress||'?';
-    if (route) { 
-      self.scribe.debug("PROXY[%s->%s]: %s %s", ip, rqst.headers.host, rqst.method, rqst.url);
-      self.proxy.web(rqst, rply, {target: route});
+  return function proxyRouter(rqst, rply) {
+    let [host, method, url] = [rqst.headers.host||'', rqst.method, rqst.url];
+    let route = self.cfg.routes[host];
+    let wildroute = self.cfg.routes['*.' + host.substr(host.indexOf('.')+1)];
+    let ip = rqst.headers['x-forwarded-for']||rqst.connection.remoteAddress||'?';
+    if (route||wildroute) {
+      self.context.internals.Stat.inc(self.tag,'served');
+      self.scribe.debug("PROXY[%s->%s]: %s %s (@%s)", ip, host, method, url, route||wildroute);
+      self.proxy.web(rqst, rply, {target: route||wildroute});
       }
     else {
-      rply.writeHead(404, {"Content-Type": "text/plain"});
-      rply.write("404 Proxy Route Not Found\n");
-      if (ip.match('192.168.0')) {  // local diagnostics
-        self.scribe.debug("NO PROXY ROUTE %s->%s: %s", ip, rqst.headers.host, rqst.url);
-        for (var r of self.cfg.routes) {
-          self.scribe.trace("  ROUTE[%s]: %s", r, self.cfg.routes[r]);
-          rply.write("  ROUTE["+r+"]: "+self.cfg.routes[r]+"\n");
-          };
-        }
-      else {
-        self.probes += 1;
-        self.scribe.warn("NO PROXY ROUTE[%d] %s->%s: %s", self.probes, ip, rqst.headers.host, rqst.url);
+      if (!self.ignore.some(function(x){ return ip.match(x)})) {  
+        // ignore diagnostics for local or specified addresses or nets
+        let probes = self.context.internals.Stat.inc(self.tag,'probes');
+        self.scribe.warn("NO PROXY ROUTE[%d] %s->(%s): %s %s", probes, ip, host, method, url);
         };
+      rply.writeHead(404, "Proxy Route Not Found!" ,{"Content-Type": "text/plain"});
+      rply.write("404: Proxy Route Not Found!");
       rply.end();
       };
     };
@@ -91,6 +146,23 @@ Proxy.prototype.router = function router() {
 // launch proxy servers...
 // dedicated http server needed to intercept and route to multiple targets.
 Proxy.prototype.start = function start(callback) {
-  this.server = http.createServer(callback || this.router()).listen(this.cfg.port);
-  this.scribe.info("Proxy '%s' service started in %s mode listening on %d...", this.cfg.tag, process.env.NODE_ENV, this.cfg.port);
+  if (this.secure!==undefined) {
+    this.server = https.createServer(this.secure.options, callback||this.router());
+    this.server.on('upgrade',(req,socket,head)=> {
+console.log('secure: ',req.headers,req.url);
+      this.proxy.ws(req,socket,head);
+      });
+    this.server.listen(this.cfg.port);
+    this.scribe.info("SECURE PROXY service started for '%s' @ %s...", this.cfg.tag, this.cfg.port);
+    }
+  else {  
+    this.server = http.createServer(callback||this.router());
+    this.server.on('upgrade',(req,socket,head)=> {
+console.log('insecure: ',req.headers);
+      this.proxy.ws(req,socket,head);
+      });
+    this.server.listen(this.cfg.port);
+    this.scribe.info("PROXY service started for '%s' @ %s...", this.cfg.tag, this.cfg.port);
+    };
+  this.context.internals.Stat.set("proxy",this.cfg.tag,{port: this.cfg.port, secure: (this.secure!==undefined)});
   };

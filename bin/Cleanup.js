@@ -1,19 +1,19 @@
-// Extension to process object for graceful app specific cleanup...
+// Handles graceful application specific cleanup to avoid hung servers...
 
-process.cleanup = {
-  // define a default app cleanup reference to be overridden by app...
-  app: function() { console.log('Cleanup noOp...'); },
+var cleanup = {
+  // define a default callback reference to be overridden by application...
+  callback: null,
   // flag to prevent circular calls.
   called: false,
   // define a function to call for graceful exiting...
   delay: 400,  
   gracefulExit: function (code) {
-    if (!process.cleanup.called) {
-      process.cleanup.called = true;
+    if (!this.called) {
+      this.called = true;
       console.log("Graceful exit cleanup...");
-      process.cleanup.app();   // do app specific cleaning once before exiting
-      code = (code!==undefined) ? code : 1;
-      setTimeout(function() {process.exit(code);},process.cleanup.delay);  // no stopping!
+      if (this.callback) this.callback();   // do app specific cleaning once before exiting
+      code = (code!==undefined) ? code : 1; // assume non-zero (i.e. error) if not explicit
+      setTimeout(function() {process.exit(code);},this.delay);  // no stopping!
       };
     }
   };
@@ -21,15 +21,14 @@ process.cleanup = {
 // clean exit test...
 process.on('beforeExit',
   function () {
-    process.cleanup.gracefulExit(0);
+    cleanup.gracefulExit(0);
     }
   );
 
 // catch ctrl+c event and exit gracefully
 process.on('SIGINT', 
   function () {
-    console.log('CTRL+C...');
-    process.cleanup.gracefulExit(2);
+    cleanup.gracefulExit(2);
     }
   );
 
@@ -38,6 +37,12 @@ process.on('uncaughtException',
   function(e) {
     console.log('Uncaught Exception...');
     console.log(e.stack);
-    process.cleanup.gracefulExit(99);
+    cleanup.gracefulExit(99);
     }
   );
+
+
+module.exports = init = function init(cb=null) {
+  cleanup.callback = cb;
+  return cleanup;
+  };

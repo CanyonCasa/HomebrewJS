@@ -1,74 +1,18 @@
 ﻿/*
- JavaScript base extensions...
- (c) 2017 Enchanted Engineering, MIT license
+ Personal JavaScript language extensions...
+ (c) 2018 Enchanted Engineering, MIT license
 */
 
 
 ///************************************************************
-/// Object Extensions...
-///************************************************************
-// make object keys iterable to work in for-of-loops like arrays
-Object.prototype[Symbol.iterator] = function () {
-  var keys = Object.keys(this); var index = 0;
-  return { next: () => index<keys.length ? {value: keys[index++], done: false} : {done: true} };
-}
-// following done as prototype definitions to force non-enumerable to not break "for in" loops
-Object.defineProperty(Object.prototype,'mergekeys', {
-  value: function(merged) {for (var key of Object.keys(merged||{})) { this[key] = merged[key]; }; return this; },
-  enumerable: false
-})
-Object.defineProperty(Object.prototype,'asJx', {
-  value: function(pretty) { return (JSON.stringify(this,null,pretty?2:0)); },
-  enumerable: false
-})
-
-
-///************************************************************
-/// String Object Extensions...
-///************************************************************
-// pads a string, right or left, with a character to specified length...
-// examples: 
-//   'Sunday'.pad(' ',10); // returns 'Sunday    '
-//   'Sunday'.pad(' ',10,true); // returns '    Sunday'
-//   'Sunday'.pad(' ',3); // returns 'Sun'
-String.prototype.pad = function (ch,len,left){
-  var str=(left)?this.slice(-len):this.slice(0,len);
-  while(str.length<len){str=(left)?ch+str:str+ch;};
-  return str;
-}
-// clone of lastIndexOf
-String.prototype.last = String.prototype.lastIndexOf;
-// shortcut for test of character existence
-String.prototype.has = function (ch) { return this.indexOf(ch)!==-1; };
-// convert string to regular expression...
-String.prototype.toRegExp = function() {
-  var str = this.slice();
-  var pat = str.indexOf('/')==0 ? str.slice(1,str.lastIndexOf('/')) : str;
-  var flags = str.indexOf('/')==0 ? str.slice(str.lastIndexOf('/')+1) : '';
-  return new RegExp(pat,flags);
-}
-String.prototype.asJx = function (reviver) { 
-  var temp = {};
-  try {temp=JSON.parse(this.slice(),reviver)} catch (e) {}; 
-  return temp;
-}
-String.prototype.part = function (regex,dflt,index) {
-  var str = this.slice();
-  var mx = str.match(regex);
-  return mx ? mx[index||0] : dflt;
-}
-
-
-///************************************************************
-/// Number Object Extensions...
-///************************************************************
-Number.isOdd = function (n) { return n % 2 ? true : false; };
-global.isOdd = Number.isOdd;
-
-///************************************************************
 /// Array Object Extensions...
 ///************************************************************
-Array.prototype.has=function (element){ return this.indexOf(element)!==-1; };
+// Boolean indicating if Array contains element 
+if (!Array.has) Object.defineProperty(Array,'has', {
+  value: function (element){ return this.indexOf(element)!==-1; },
+  enumerable: false
+})
+
 
 ///************************************************************
 /// Date Object Extensions...
@@ -87,13 +31,13 @@ const msPer = {
   };
 
 // Calculate the ISO week of the year...
-Date.prototype.getWeek = function () {
+if (!Date.prototype.getWeek) Date.prototype.getWeek = function () {
   var firstThu = new Date(this.getFullYear(),0,[5,4,3,2,1,7,6][new Date(this.getFullYear(),0,1).getDay()]);
   var nearestThu = new Date(this.getFullYear(),this.getMonth(),this.getDate()-((this.getDay()+6)% 7)+3);
   return (nearestThu.getFullYear()>firstThu.getFullYear()) ? 1 : 
     1 + Math.ceil((nearestThu.valueOf()-firstThu.valueOf())/msPer['W']);
 }
-Date.prototype.getUTCWeek = function () {
+if (!Date.prototype.getUTCWeek) Date.prototype.getUTCWeek = function () {
   var firstThu = new Date(this.getUTCFullYear(),0,[5,4,3,2,1,7,6][new Date(this.getUTCFullYear(),0,1).getUTCDay()]);
   var nearestThu = new Date(this.getUTCFullYear(),this.getUTCMonth(),this.getUTCDate()-((this.getUTCDay()+6)% 7)+3);
   return (nearestThu.getUTCFullYear()>firstThu.getUTCFullYear()) ? 1 : 
@@ -101,17 +45,17 @@ Date.prototype.getUTCWeek = function () {
 }
 
 // Test if date or given year is a leapyear...
-Date.prototype.isLeapYear = function (year) {
+if (!Date.prototype.isLeapYear) Date.prototype.isLeapYear = function (year) {
   year = year || this.getFullYear();
   return year%4==0&&(year%100==year%400);
 }
 
 // Calculate the day of the year...
-Date.prototype.getDayOfYear = function () {
+if (!Date.prototype.getDayOfYear) Date.prototype.getDayOfYear = function () {
   var leapDay = (this.getMonth()>1 && Date.prototype.isLeapYear(this.getFullYear())) ? 1 : 0;
   return (this.getMonth() ? daysByMonth.slice(0,this.getMonth()) : [0]).reduce((t,m)=>t+=m) + this.getDate() + leapDay;
 }
-Date.prototype.getUTCDayOfYear = function () {
+if (!Date.prototype.getUTCDayOfYear) Date.prototype.getUTCDayOfYear = function () {
   var leapDay = (this.getUTCMonth()>1 && Date.prototype.isLeapYear(this.getUTCFullYear())) ? 1 : 0;
   return (this.getUTCMonth() ? daysByMonth.slice(0,this.getUTCMonth()) : [0]).reduce((t,m)=>t+=m) + this.getUTCDate();
 }
@@ -123,7 +67,7 @@ Date.prototype.getUTCDayOfYear = function () {
 // ms (milliseconds), minutes, and months require at least 2 characters to differentiate
 // assumes milliseconds by default. 
 var chgPattern = /^(?:(ms)|(y)|(mo)|(w)|(d)|(h)|(mi?)|(s))|(~)/;
-Date.prototype.change = function (adjStr) {
+if (!Date.prototype.change) Date.prototype.change = function (adjStr) {
   var adjustments = adjStr.split(/[\s,]+/);
   while (adjustments.length) {
     var quan = Number(adjustments.shift());
@@ -149,7 +93,7 @@ Date.prototype.change = function (adjStr) {
 // Difference two dates. Returns an object with several terms
 // byUnit returns the absolute difference for each unit
 // bySet return the running series of years, months, days, hours, minutes, and seconds.
-Date.prototype.diff = function (date) {
+if (!Date.prototype.diff) Date.prototype.diff = function (date) {
   var differBy = (first,last,delta)=> (a.valueOf()+delta<bvalueOf());
   var dx = {value: date.valueOf()-this.valueOf(), byUnit: {}, bySet: {} };
   dx.sign = (dx.value>0) ? 1 : (dx.value<0) ? -1 : 0;
@@ -188,7 +132,7 @@ Date.prototype.diff = function (date) {
 // Date.prototype.style(<format_string>)
 //   formats a date according to specified string defined by ...
 //     'text'    quoted text preserved
-//     (UTC:):   prefix to force Universal Coordinated Time, must be at start of format
+//     UTC:      prefix to force Universal Coordinated Time, must be at start of format
 //     YY:       2 digit year, i.e. 16
 //     YYYY:     4 ddigit year, i.e. 2016
 //     M:        month, i.e. 2
@@ -261,7 +205,8 @@ var masks = {
   isoUtcDateTime:   "UTC:YYYY-MM-DD'T'hhhh:mm:ss'Z'",
   http:             "UTC:DDD, DD MMM YYYY hhhh:mm:ss 'GMT'",
   httpLocal:        "DDD, DD MMM YYYY hhhh:mm:ss z ('GMT'o)",
-  stamp:            "YYYYMMDD'T'hhhhmmss-x"
+  stamp:            "YYYYMMDD'T'hhhhmmss-x-o-z",
+  iot:              "e+o+z"
   };
 var days = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 var months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -269,7 +214,7 @@ var zones = {P:'Pacific', M:'Mountain', C:'Central', E:'Eastern', A:'Atlantic'};
 var times = {S:'Standard', D:'Daylight', P:'Prevailing'};
 var token = /YY(?:YY)?|M{1,4}|D{1,4}|W{1,2}|h{1,4}|m{1,2}|s{1,2}|a{1,2}|z{1,2}|[enopx]|"[^"]*"|'[^']*'/g;
 var pad = function(x,n) { return ('0000'+String(x)).slice(-(n||2)); };
-Date.prototype.style = function (frmt) {
+if (!Date.prototype.style) Date.prototype.style = function (frmt) {
   frmt = masks[frmt] || frmt;  // default and translate masks 
   var utc = ((frmt||'').slice(0,4)==='UTC:') ? 'UTC' : '';  // set flag and strip prefix?
   frmt = utc ? frmt.slice(4) : frmt;
@@ -337,3 +282,129 @@ Date.prototype.style = function (frmt) {
     };
   return frmt.replace(token, function ($0) { return $0 in flags ? flags[$0] : $0.slice(1,$0.length-1); });
   };
+
+  
+  ///************************************************************
+/// Number Object Extensions...
+///************************************************************
+if (Number.isOdd===undefined) Number.isOdd = (n) => n % 2 ? true : false;
+if (Number.isEven===undefined) Number.isEven = (n) => !Number.isOdd(n);
+
+///************************************************************
+/// Object Extensions...
+///************************************************************
+// make object keys iterable to work in for-of-loops like arrays
+Object.prototype[Symbol.iterator] = function () {
+  var keys = Object.keys(this); var index = 0;
+  return { next: () => index<keys.length ? {value: keys[index++], done: false} : {done: true} };
+}
+if (!Object.isObj) Object.defineProperty(Object,'isObj', {
+  value: (obj) => (typeof obj==='object' && !(obj instanceof Array)),
+  enumerable: false
+  })
+// following done as prototype definitions to force non-enumerable to not break "for in" loops
+/// merge the keys of an ojbect into an existing objects with merged object having precedence
+///Object.defineProperty(Object.prototype,'mergekeyskeys', {
+///  value: function(merged) {for (var key of Object.keys(merged||{})) { this[key] = merged[key]; }; return this; },
+///  enumerable: false
+///})
+// recursively mergekeys the keys of an object into an existing objects with mergekeysd object having precedence
+if (!Object.mergekeys) Object.defineProperty(Object.prototype,'mergekeys', {
+  value: 
+    function(merged={}) {
+      for (let key in merged) { 
+        if (Object.isObj(merged[key]) && Object.isObj(this[key])) {
+          this[key].mergekeys(merged[key]); // both objects so recursively mergekeys
+        }
+        else {
+          this[key] = merged[key];  // just replace with or insert mergekeysd
+        };
+      };
+      return this; 
+    },
+  enumerable: false
+})
+// shortcuts for converting to/from JSON...
+if (!Object.asJx) {
+  Object.defineProperty(Object.prototype,'asJx', {
+    value: function(pretty) { return (JSON.stringify(this,null,pretty?2:0)); },
+    enumerable: false
+  })
+  Object.defineProperty(String.prototype,'asJx', {
+    value: function(reviver) { 
+      var temp = {};
+      try {temp=JSON.parse(this.slice(),reviver)} catch(e) {temp.err=e.toString()}; 
+      return temp;
+      },
+    enumerable: false
+  })
+}
+// order the values of an object as defined by list or alphabetically into an array 
+if (!Object.orderBy) Object.defineProperty(Object.prototype,'orderBy', {
+  value: function(list) {
+    var ordered = [];
+    list = list || Object.keys(this).sort();
+    for (let i in list) ordered.push(this[list[i]]);
+    return ordered; 
+  },
+  enumerable: false
+})
+
+// return resolved object by following sub keys without undefined warnings
+if (!Object.retrieve) Object.defineProperty(Object.prototype,'retrieve', {
+  value: function (...args){ // (optional object, keys array, optional default)
+    let obj = (args[0] instanceof Array) ? this : args[0];
+    let keys = (args[0] instanceof Array) ? args[0] : args[1];
+    let dflt = args[2] || (args[1]!==keys ? (args[1]||{}) : {});
+    while (keys.length) {
+      if (obj===undefined) break;
+      obj = obj[keys.shift()];
+      };
+    return (obj===undefined) ? dflt : obj;
+  },
+  enumerable: false
+})
+
+
+///************************************************************
+/// String Object Extensions...
+///************************************************************
+// pads a string, right or left, with a character to specified length...
+// examples: 
+//   'Sunday'.pad(' ',10); // returns 'Sunday    '
+//   'Sunday'.pad(' ',10,true); // returns '    Sunday'
+//   'Sunday'.pad(' ',3); // returns 'Sun'
+if (!String.prototype.pad) 
+  Object.defineProperty(String.prototype,'pad', {
+    value: function(ch,len,left=false){
+      let str = (left) ? this.slice(-len) : this.slice(0,len);
+      let x = len - str.length;
+      return x>0 ? (left ? (new Array(x).join(ch))+str : str+(new Array(x).join(ch))) : str;
+    }
+  })
+// clone of lastIndexOf
+if (!String.prototype.last)
+  Object.defineProperty(String.prototype,'last', {
+    value: String.prototype.lastIndexOf,
+    enumerable: false
+  })  
+// shortcut for test of character existence
+if (!String.prototype.has)
+  Object.defineProperty(String.prototype,'has', {
+    value: function(ch){
+      return this.indexOf(ch)!==-1;
+    },
+    enumerable: false
+  })  
+// convert string to regular expression...
+if (!String.prototype.toRegExp)
+  Object.defineProperty(String.prototype,'toRegExp', {
+    value: function(){
+      let pat = this.indexOf('/')==0 ? this.slice(1,str.lastIndexOf('/')) : str;
+      let flags = this.indexOf('/')==0 ? this.slice(str.lastIndexOf('/')+1) : '';
+      return new RegExp(pat,flags);
+    },
+    enumerable: false
+  })  
+// convert to JSON object... 
+// Since String is an object, asJx defined with object above to override Object.asJx
