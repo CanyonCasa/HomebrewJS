@@ -67,6 +67,7 @@ const format = require('util').format;
 const path = require('path');
 const sqlite3 = require('sqlite3'); // sqlite3 bindings...
 const Safe = require('./SafeJSON');
+/// const csv = require('./CSV');
 
 // ************************************************************
 // HELPER METHODS...
@@ -109,7 +110,7 @@ function printableQuery(query) {
     var msg = (chngd==-1) ? "Too few parameters." : "Too many parameters.";
     return "-- ERROR: Failed making printable query! - "+msg+" --> "+qstr;
     };
-  return qstr;
+  return qstr+';';
   };
 
 // helper to reduce query rows to "expected result" (variable type) by following rules:
@@ -196,6 +197,7 @@ module.exports = WrapSQ3 = function WrapSQ3(cfg, callback) {
   this.cfg.log = cfg.log || ((cfg.file==':memory:') ? 'memory.log' : 'WrapSQ3.log');
   this.cfg.mode = cfg.mode || (sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE);  // set default database mode
   this.cfg.verbose = cfg.verbose;
+  this.tag = cfg.tag || path.basename(cfg.file,path.extname(cfg.file));
   if (cfg.verbose) sqlite3.verbose();  // enable traceback debug support
   var self = this;    // define a local scope reference for callback
   // open the connection ...
@@ -413,6 +415,7 @@ WrapSQ3.prototype.getDefinition = function getDefinition (definition, callback) 
         def.action = 'FOUND';
         def.jstr = def.value;
         def.value = def.value.asJx();
+        if ((typeof def.value=='object') && ('err' in def.value)) { def.error=Object.assign({},def.value); def.value={}; };
         callback(null,def);
         }
       else if (Object.keys(def).length===0) {
@@ -504,8 +507,9 @@ WrapSQ3.prototype.setDefinition = function setDefinition (definition, callback) 
 WrapSQ3.prototype.lookup = function lookup (item, callback) {
   this.getDefinition((typeof item=='object') ? item : {section:'LOOKUP',key:item,dflt:{}},
     function (err,def){
-      if (err) return callback(err,{});
-      if (def.action!=='FOUND') return callback(null,def.mergekeys({err:{code:404,msg:'LOOKUP NOT FOUND'}}));
+      if (err) return callback(err,def);
+      if ((def.action!=='FOUND') && def.required) return callback({code:404,msg:'LOOKUP NOT FOUND'},def);
+      if ('error' in def) return callback(def.error,def);
       callback(null,def);
       }
     );
@@ -514,48 +518,59 @@ WrapSQ3.prototype.lookup = function lookup (item, callback) {
 
 // convenience method to perform filtered INSERT actions
 WrapSQ3.prototype.find = function find(recipe,data,callback) {
-  var thisDB = this;
   // prep optional (tainted) params based on recipe...
   recipe.safeParams = (recipe.filter) ? Safe.jsonSafe(data,recipe.filter) : data;
   // order query params if necessary
   recipe.params = (recipe.order) ? recipe.safeParams.orderBy(recipe.order) : recipe.safeParams;
   // recipe now has complete query of sql, params, and flags
-  thisDB.sql(recipe, function(err,result) {
-    if (err) return callback(err);
-    // restore JSON fields - result could be an object or array of objects
-    if (Array.isArray(result)) {
-      for (let n=0;n<result.length;n+=1) {
-        for (let j of recipe.json||[]) { if (j in result[n]) result[n][j] = result[n][j].asJx(); };
+  try {
+    this.sql(recipe, function(err,result) {
+      if (err) return callback(err);
+      // restore JSON fields - result could be an object or array of objects
+      if (Array.isArray(result)) {
+        for (let n=0;n<result.length;n+=1) {
+          for (let j of recipe.json||[]) { if (j in result[n]) result[n][j] = result[n][j].asJx(recipe.pretty); };
+        };
+      }
+      else {
+        for (let j of recipe.json||[]) { if (j in result) result[j] = result[j].asJx(recipe.pretty); };
       };
+      // optional reduce and screening after other processing
+      result = recipe.screen ? Safe.jsonSafe(result,recipe.screen) : result;
+      result = recipe.reduce ? reduce(result,recipe.reduce) : result;
+      callback(null,result);
+      });
     }
-    else {
-      for (let j of recipe.json||[]) { if (j in result) result[j] = result[j].asJx(); };
+  catch (e) {
+    callback(e,null);
     };
-    // optional reduce after other processing
-    callback(null,recipe.reduce ? thisDB.reduce(result) : result);
-    });
   };
 
 // convenience method to retrieve authorized data
 WrapSQ3.prototype.store = function store(recipe,data,callback) {
+  var self = this;
   var thisDB = this.db;
-  // always treat as a block of INSERT actions with data being an array of arrays or objects
-  if (!recipe.block) data = [data];
+  if (data===undefined) return callback(null,[]); // no data found means no actions
+  // always treat as a block of INSERT/UPDATE/DELETE actions with data being an array of params
+  // querys involving multiple params would therefore need to be an array of objects
+  data = (Array.isArray(data)) ? data : [data]; // so wrap objects for singular queries as array
   recipe.meta = []; // return metadata
   thisDB.serialize(function() {
-    var stmt = thisDB.prepare(recipe.sql);
-      for (let d=0;d<data.length;d++) {
+    let stmt = thisDB.prepare(recipe.sql);
+    let serr = null;
+    for (let d=0;d<data.length;d++) {
       // filter data, translate JSON, and order params 
-      var px = (recipe.filter) ? Safe.jsonSafe(data[d],recipe.filter) : data[d];
-      for (let j of recipe.json||[]) { px[j] = px[j].asJx(recipe.pretty); };
+      let px = (recipe.filter) ? Safe.jsonSafe(data[d],recipe.filter) : data[d];
+      for (let j of recipe.json||[]) { if (j in px) px[j] = px[j].asJx(recipe.pretty); };
       px = (recipe.order) ? px.orderBy(recipe.order) : px;
+      self.logger(printableQuery({sql:recipe.sql,params:px}));
       stmt.run(px,function(err){
-        if (err) callback(err,px);
-        recipe.meta.push([this.lastID,this.changes]);  // lastID valid only for INSERT statements
+        // lastID valid only for INSERT statements
+        if (err) { serr = err; } else { recipe.meta.push([this.lastID,this.changes]); };
         });
       };
     stmt.finalize(function(err) {
-      callback(err,recipe.meta);
+      callback(err||serr,recipe.meta);
       });
     });
   };

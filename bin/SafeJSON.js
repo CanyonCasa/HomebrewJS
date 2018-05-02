@@ -17,19 +17,20 @@
 */
 
 ///************************************************************
-///  ...
+///  Dependencies...
 ///************************************************************
 require("./Extensions2JS"); // dependency on Date stylings
 
 var patterns = {
-  alpha: /^[a-zA-Z]+$/,
   alphanum: /^[a-zA-Z0-9]+$/,
   attr: /([a-z_$][\w$]{0,63})=(?:['"]([^'"]+)['"]|([^'" ]+))|(^[a-z_$][\w$]{0,63})/im,
   digits: /^\d+$/,
-  email: /^[a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+.[a-zA-Z]{2,4}$/,
+  email: /^[a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}$/,
+  filename: /^[^\/\\]+$/,
   hash: /^[$.\/a-zA-Z0-9]+$/, // bcrypt
   hex: /^[a-f0-9]+$/i,
   identifier: /^[a-z_$][\w$-]+$/i,
+  letter: /^[a-z]$/i,
   name: /^[a-zA-Z- ]+$/,
   phone: /^\d{10}$/,
   phonex: /^(\+[\d ]+)?([\d]{3})[-. ]?([\d]{3})[-. ]?([\d]{4})$/,
@@ -41,8 +42,8 @@ var patterns = {
   url: /^(?:(http|https|ftp|file):\/\/)*([\w.-]*[^\/])*(\.*\/[\w+$!*().\/?&=%;:@-]*)/,
   urlLocal: /^(\.*\/[\w+$!*().\/?&=%;:@-]*)/,
   username: /^[\w]{3,32}$/,
-  usernamex: /^[\w]{3,32}$|^[a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+.[a-zA-Z]{2,4}$/,
-  word: /^\w+$/,
+  usernamex: /^[\w]{3,32}$|^[a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}$/,
+  word: /^[\w-]+$/,
   words: /^[\w\s]+$/,
   zip: /^[0-9]{5}(?:-[0-9]{4})?$/
   };
@@ -101,9 +102,32 @@ var htmlModes = {
   };
 
 // escape special characters found in html text...
-var escCB = {'&': "&amp;", '<': "&lt;", '>': "&gt;", '"': "&quot;", "'": "&#039;"};
 var escHTML = function(unsafe) {
-  return unsafe.replace(/[<>"']|&(?!amp|lt|gt|quot|#039)/g, (m)=>escCB[m]);
+  var esc = {'&': "&amp;", '<': "&lt;", '>': "&gt;", '"': "&quot;", "'": "&#039;"};
+  return unsafe.replace(/[<>"']|&(?!amp|lt|gt|quot|#039)/g,m=>esc[m]);
+  };
+
+// unescape special characters found in html text...
+var unescHTML = function(safe) {
+  var unesc = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#039;': '\'' };
+  return safe.replace(/&(amp|lt|gt|quot|#039);/g,m=>unesc[m]);
+  };
+
+// strips all html tags
+var stripHTML = function(unsafe) {
+  return unsafe.replace(/<\/[^>]+>/g,'\n').replace(/<[^>]+>/g,'').replace(/\s*\n+\s*/g,'\n').trim();
+  };
+
+// html sanitizer routine...
+function htmlSafe(html,mode) {
+  var error = null; var safeHTML = '';
+  switch (mode) {
+    case 'escape': safeHTML = escHTML(html); break;
+    case 'encode': safeHTML = encodeURI(html); break;
+    case 'strip': safeHTML = stripHTML(unescHTML(html)); break;
+    default: 
+    };
+  return safeHTML;
   };
 
 // simple regular expression pattern test ...
@@ -122,7 +146,7 @@ function rexSafe(data,pattern,dflt) {
 function scalarSafe(data,filter){
   var [pat,dflt] = (Array.isArray(filter)) ? filter : [filter];
   // if no data, except for date, return default
-  if ((data===undefined || data===null || data==='') && pat!='date') { return dflt; };
+  if ((data===undefined || data===null || data==='') && pat!='date') { return dflt||data; };
   if (pat==='*') return data; // bypass, no filtering
   // begin checking data...
   // explicitly test pattern and data... 
@@ -171,82 +195,6 @@ function scalarSafe(data,filter){
     };
   };
 
-// html sanitizer routine...
-function htmlSafe(html,mode) {
-  var error = null; var safeHTML = '';
-  var filter = htmlModes[mode];
-  soap.standard = soap.standard || {};
-  var i = 20;
-  var pos = 0; var nextTag; var tmp = ''; var stripping=''; var skip=false;
-  do {
-    nextTag = html.slice(pos).match(patterns.tag);
-    if (nextTag && nextTag.index>0) {
-      // piece of text before tag...
-      tmp = escHTML(html.slice(pos,pos+nextTag.index)).trim();
-      if (!stripping&&!skip) safeHTML += tmp;
-      pos += nextTag.index;
-      };
-    if (nextTag) {
-      // handle the tag...
-      var [tag,prefix,name,attrStr] = nextTag.slice(0,4);
-      var filter = soap.standard.tags.indexOf(name)!=-1 ? soap.standard.tagDefault : name in soap.tags ? soap.tags[name] : undefined;
-      if (filter) {
-        if (stripping) {
-          // stripping and closing tag found with same name as openning tag, just clear skipping...
-          stripping = prefix=='/'&&stripping==name ? '' : stripping;
-          }
-        else {
-          // process tag...
-          if (filter.action=='strip') {
-            stripping = (filter.selfClose) ? '' : name;
-            }
-          else {
-            // valid tag...
-            if (prefix=='/') {
-              // closing tag
-              safeHTML += "</"+name+">";
-              }
-            else {
-              // openning tag...
-              var flags = (soap.standard.flags||[]).concat(filter.flags||[]);
-              var attributes = (soap.standard.attributes||[]).concat(filter.attributes||[]);
-              var attrs = []; var am;
-              do {
-                am = attrStr.trim().match(patterns.attr);
-                if (am) {
-                  if (flags.indexOf(am[4])!=-1) {
-                    attrs.push(wash(am[4],'identifier|'));
-                    };
-                  if (attributes.indexOf(am[1])!=-1) {
-                    attrs.push(am[1]+'="'+wash(am[2]||am[3],soap.attributes[am[1]])+'"');
-                    };
-                  attrStr=am.input.slice(am[0].length).trim();
-                  };
-                } while (am);
-              // add sanitized tag...
-              safeHTML += '<' + name + (attrs.length ? ' '+attrs.join(' ') : '') + '>';
-              };
-            };
-          };
-        }
-      else {
-        // skip tag as no filter parameters given...
-        //skip = !skip;
-        };
-      pos += nextTag[0].length;
-      }
-    else {
-      // no tag, so handle any remaining text...
-      if (pos<html.length) {
-        tmp = escapeHTML(html.slice(pos));
-        if (!stripping) safeHTML += tmp;
-        };
-      };
-    i--;
-    } while (nextTag&&i>0);
-  return safeHTML;
-  };
-
 // recursive JSON filter. Expects a filter with structure matching JSON data, jx
 function jsonSafe(jx,filter) {
   if (filter==='*') return jx;
@@ -278,10 +226,8 @@ function jsonSafe(jx,filter) {
 
 module.exports = {
   patterns: patterns,
-  htmlModes: htmlModes,
-  escHTML: escHTML,
+  htmlSafe: htmlSafe,
   rexSafe: rexSafe,
   scalarSafe: scalarSafe,
-  htmlSafe: htmlSafe,
   jsonSafe: jsonSafe
   };

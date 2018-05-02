@@ -173,9 +173,9 @@ var cfg = {
         },
       aliases: ['shop.sedillocanyon.net'],
       handlers: [
-        { tag: 'database',
+        { tag: 'data',
           route:'/([$]):recipe(\\w+)/:opt1?/:opt2?/:opt3?/:opt4?/:opt5?',
-          require: './database',
+          require: './data',
           options: {
             database: {file:"../restricted/shop.sq3",log:"../logs/shop.log"}
             }
@@ -250,9 +250,9 @@ var cfg = {
               }
             }
           },
-        { tag: 'database',
+        { tag: 'data',
           route:'/([$]):recipe(\\w+)/:opt1?/:opt2?/:opt3?/:opt4?/:opt5?',
-          require: './database',
+          require: './data',
           options: {
             database: 'site'
             }
@@ -313,9 +313,9 @@ var cfg = {
               }
             }
           },
-        { tag: 'database',
+        { tag: 'data',
           route:'/([$]):recipe(\\w+)/:opt1?/:opt2?/:opt3?/:opt4?/:opt5?',
-          require: './database',
+          require: './data',
           options: {
             database: 'site'
             }

@@ -12,8 +12,19 @@ NodeJS implements server-side JavaScript and supports development of application
 
 The document *A Flexible User Configurable NodeJS Web Server.docx* and example configuration files provide additional details.
 
+### Changes
+
+- Embellishments based on deployment of a fully functional shopping site
+  - Upgraded database.js to data.js to also include get/post of files via recipes
+  - added JSON to CSV module
+  - Extended Notification to enable sending SMS/email messages from a webpage
+- Fixed SafeJSON HTML routines
+- Numerous bug fixes
+  - A number of changes to WrapSQ3.find and WrapSQ3.store to improve robustness
+
 ### To Do
 
 - Fix proxy/websocket interaction
-- Add GET /user/items to hbAuth.js 
 - Build a demo site
+- Update documentation
+- Cleanup and post VueJS components

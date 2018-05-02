@@ -331,9 +331,10 @@ if (!Object.asJx) {
     enumerable: false
   })
   Object.defineProperty(String.prototype,'asJx', {
-    value: function(reviver) { 
-      var temp = {};
-      try {temp=JSON.parse(this.slice(),reviver)} catch(e) {temp.err=e.toString()}; 
+    value: function(reviver) {
+      let str = this.slice()
+      let temp = {};
+      try {temp=JSON.parse(str,reviver)} catch(e) { return {err:e.toString(),code:'JX_PARSE', str:str}; }; 
       return temp;
       },
     enumerable: false

@@ -3,6 +3,7 @@
 // app and middleware dependencies
 const path = require('path');
 const express = require('express');
+const fileUpload = require('express-fileupload');
 const compression = require('compression');     // for compressing responses
 const cookies = require('cookie-parser');       // for cookies
 const bodyParser = require('body-parser');      // for JSON and urlencoded bodies
@@ -113,18 +114,21 @@ Site.prototype.start = function start() {
   if (opts.cookies) this.xApp.use(cookies());
   if (opts.json) this.xApp.use(bodyParser.json()); 
   if (opts.url) this.xApp.use(bodyParser.urlencoded(opts.url));
+  if (opts.upload) this.xApp.use(fileUpload()); 
   // basic site initialization middleware...
   this.scribe.trace("Initializing handler chain...");
   this.xApp.use(function init(rqst,rply,next){
+    self.scribe.trace("RQST: %s", rqst.url);  // log request...
     // apply any (global and site specific) static headers passed to site...
     rqst.hb = {};
-    for (var h in this.headers) rply.set(h,this.headers[h]);
+    for (var h in self.headers) rply.set(h,self.headers[h]);
     next(); // proceed to next middleware
     });
   if (opts.auth) {  // handle hbAuth internally so route is set correctly and at start of response chain
     let hA = {tag: 'auth', require: './hbAuth', route: ['/user/:rqrd1/:rqrd2/:opt1?',''], options: opts.auth};
     this.addHandler(hA);
     };
+  if (opts.notify) this.xApp.post('/@:send',this.services.notify.sendWare());
   // site-specific configured handlers
   this.site.handlers.forEach((handler)=>{this.addHandler(handler);});
   // handler to throw default error if this point reached since no handler replied
@@ -150,13 +154,13 @@ Site.prototype.start = function start() {
       function defaultErrorHandler(err,rqst,rply,next) {
         if (err instanceof Object) {
           if (err.code) { // homebrew error {code: #, msg:'prompt'}...
-            err.msg = err.msg || err.toString();
+            err.msg = err.msg || JSON.stringify(err);
             self.scribe.warn('HOMEBREW INTERNAL ERROR[%s]: %s',err.code,err.msg);
             self.internals.Stat.inc(self.tag,err.code);
             rply.status(500).send('HOMEBREW INTERNAL ERROR['+err.code+']: '+err.msg);
             } 
           else {  // JavaScript/Node error...
-            self.scribe.error('ERROR: %s %s (see transcript)',err.toString()||'?', err.stack.split('\n')[1].trim());
+            self.scribe.error('ERROR: %s %s (see transcript)',err.toString()||'?', ((err.stack||'').split('\n')[1]||'').trim());
             self.internals.Stat.inc(self.tag,500);
             self.scribe.dump(err.stack);
             rply.status(500).send('INTERNAL SERVER ERROR: 500');
@@ -169,9 +173,11 @@ Site.prototype.start = function start() {
           self.internals.Stat.inc(self.tag,code);
           rply.status(code).send('OOPS[' + code + ']: ' + errMsgs[code]);
           };
+        rply.end();
         }
       );
     };
+  
   // start a server...
   if ('secure' in this.site) {
     let ssl = {};

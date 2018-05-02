@@ -73,6 +73,7 @@ exports = module.exports = function utility(options) {
                 }
               }
             });
+          info.mergekeys(site.internals.Stat.get());
           ///if (Object.keys(rqst.hbSession||{}).length) scribe.debug("SESSION: %s",rqst.hbSession.asJx());
           break;
         };

@@ -15,10 +15,7 @@ depends on a recipe definition object to determine the data flow that includes f
     "json": An optional array specifying the names of fields that should be converted to JSON (POST) or from json (GET)
     "reduce": An optional flag to reduce the results (GET only)
     "block": An optional flag to treat data as an array of arrays or block store (POST only)
-    "auth": Optional authorization requirements, see isAuth function
-      "user":
-      "key":
-      "action":
+    "auth": Optional authorization requirements, "auth":{"service":"level"}, see isAuth function
 
 assumes parameter based express routing: '/([$]):recipe(\\w+)/:opt1?/:opt2?/:opt3?/:opt4?/:opt5?'
   that defines a / followed by a '$' character, followed by a required recipe key (word only), followed by up to 5 optional params.
@@ -68,7 +65,7 @@ exports = module.exports = function database(options) {
   // this function called by express app for each page request...
   return function databaseMiddleware(rqst, rply, next) {
     // first lookup recipe based on parameter provided
-    scribe.trace("DATABASE[%s]: %s",rqst.method,rqst.params.recipe);
+    scribe.trace("DATABASE[%s]: %s %s",db.tag, rqst.method,rqst.params.recipe);
     db.lookup(rqst.params.recipe,
       function (err,recipeObj) {
         if (err) return next(err);
@@ -83,7 +80,7 @@ exports = module.exports = function database(options) {
               rply.json(found);
             });
           }
-        else if (rqst.method=='POST') {
+        else if (rqst.method=='POST' || rqst.method=='PUT') {
           // store the data, query data in body, may be an object or array of objects
           db.store(recipe,rqst.body.data,
             function(err,metadata) {

@@ -139,16 +139,17 @@ var UsersDB = (()=>{
         recipes=d.value; 
       });
     },
-    askAuth: (who,service) => service ? obj(who,'credentials','auth')[service]||'' : obj(who,'credentials','auth'),
+    askAuth: (who,service) => service ? obj(who,'authorizations')[service]||'' : obj(who,'authorizations'),
     askChallenge: (who) => obj(who,'credentials','challenge'),
     askCredentials: (who) => obj(who,'credentials'),
     askIdentification: (who) => obj(who,'identification'),
     askLocalPW: (who) => obj(who,'credentials')['local']||'',
     askPhone: (who) => obj(who,'identification','phone'),
     askStatus: (who,state) => state ? (obj(who).status===state) : obj(who).status,
+    authUsers: (data,cb) => {hDB.store(recipes.auth,data,cb);},
     backup: () => {hDB.backup();},
-    chgAccount: (who,account) => {who.identification.account = account;},
-    chgAuth: (who,auth) => {who.credentials.auth.mergekeys(auth||{});},
+    chgAccount: (who,account) => {who.account = account;},
+    chgAuth: (who,auth) => {who.authorizations.mergekeys(auth||{});},
     chgChallenge: (who,chlg) => {who.credentials.challenge = chlg;},
     chgCredentials: (who,credentials) => {who.credentials.mergekeys(credentials||{});},
     chgIdentification: (who,identification) => {who.identification.mergekeys(identification||{});},
@@ -157,9 +158,7 @@ var UsersDB = (()=>{
     createUser: (who,cb) => {hDB.store(recipes.create,who,cb);},
     getAPI: (key,cb) => {hDB.getDefinition({section:'API',key:key,dflt:{}},(e,d)=>{cb(e,d.value)});}, 
     getUser: getUser,
-    groupChange: (users,cb) => {
-      
-    },
+    listUsers: (cb) => {hDB.find(recipes.list,{},cb);},
     updateUser: (who,cb) => {hDB.store(recipes.update,who,cb);}
   }
 })();
@@ -171,18 +170,20 @@ var UsersDB = (()=>{
 // authenticate user logins, validate API access, and authorize user permissions
 // isAuth function used as a callback from Express requests context (i.e. this) 
 var isAuth = function isAuth(auth={}){
+  //console.log("isAuth:",this.hbSession,auth);
   var test = {};
   switch (auth.check) { // auth = {check:'...', ...} holds given login/api parameters to test
-    case 'login':   // local login authentication for auth.user
-      let local = UsersDB.askStatus(auth.user,'ACTIVE') ? UsersDB.askLocalPW(auth.user) : ''; // get valid credentials
-      if (local && bcrypt.compare((this.hbSession.auth||{}).hash||'',local)) {
-        // success, add user to Sessions cache and session and return hsid result
-        this.hbSession.id = Sessions.add(auth.user);
-        this.hbSession.user = auth.user;
-        scribe.debug("Successful login: %s (%s)", auth.user.username,this.hbSession.id);
-        return this.hbSession.id; 
-        };
-      return '';
+    case 'login':   // local login authentication for auth.user against session auth credentials
+      return new Promise((resolve,reject)=>{
+        if (!UsersDB.askStatus(auth.user,'ACTIVE')) return resolve(false);
+        let query = (this.hbSession.auth||{}).hash||'';  // recovered credentials to query against account
+        let chlg = UsersDB.askChallenge(auth.user);
+        let onetime = chlg.expires>this.hbSession.now ? crypto.plus.hash(auth.user.username+chlg.code) : '';
+        if (onetime && query && (query==onetime)) return resolve("once");
+        let local = UsersDB.askLocalPW(auth.user); // get valid local login credentials
+        if (local && query) return bcrypt.compare(query,local).then((ok)=>{resolve(ok)});
+        return resolve(false);
+        });
     case 'challenge':     // authenticate auth.code against auth.challenge
       return (auth.code===auth.challenge.code && auth.challenge.expires>this.hbSession.now);
     case 'api':     // authenticate API hash
@@ -194,18 +195,17 @@ var isAuth = function isAuth(auth={}){
         };
       break;
     default:        // check authorization , i.e auth={service:requested_access}
-      /// account for default authorizations i.e. user 1 auth
-      var service = Object.keys(auth)[0]; // check involves only a single key!
-      // if no service defined, just check if request by an authenticated user
-      if (service===undefined) return ('id' in this.hbSession);  // id validated when defined!
-      // if service defined as user, check if value matches authenticated user
-      if (service==='user') return ((this.hbSession.user||{}).username==auth['user']);
-      // get (valid) user permissions for service...
-      let permissions = (((this.hbSession.user||{}).credentials||{}).auth||{})[service]||'';
-      // service (key) with no requested access (value falsy), default to allow if service in user credentials not deny
-      if (!auth[service]) return (permissions!='DENY');
-      // requested access specified, check if in delimited list of permissions, e.g. "read,write"
-      return (permissions==='*' || permissions.indexOf(auth[service])!=-1);
+      if (Object.keys(auth).length!==1) return false; // check involves only a single key!
+      let service = Object.keys(auth)[0];
+      let access = auth[service];
+      // if service defined as user, check if value matches authenticated user or validated user
+      if (service==='user' && access=='') return ('id' in this.hbSession);  // id validated when defined!
+      if (service==='user') return ((this.hbSession.user||{}).username==access);
+      // get user permission for this service; default to allow...
+      let permission = UsersDB.askAuth(this.hbSession.user||{},service)||'';
+      let rank = ['DENY','READ','WRITE','ADMIN'];   // DENY (index=-1), ALLOW (no check), READ only, WRITE permitted, ADMIN
+      // check if granted permission 'equals or exceeds' required access; NOTE: access level of OPEN (index=-1) always returns true!
+      return (rank.indexOf(permission)>=rank.indexOf(access));
     };
   };
 
@@ -272,19 +272,19 @@ module.exports = hbAuth = function hbAuth(options){
         };
       };
     // only executes if POST and /user/:action/:user/:arg? route match!
-    if (rqst.method==='POST' && rqst.params.action) {     // user action request
+    if (rqst.method==='POST' && rqst.params.rqrd1) {     // user action request
       let [action,user,arg] = [rqst.params.rqrd1,rqst.params.rqrd2,rqst.params.opt1];
       UsersDB.getUser(user,(err,who)=>{
         if (err) next(500);
         switch (action) {
           case 'account': // create a user account or update identification
-            let data = (rqst.body.account||{});
+            let data = (rqst.body||{});
             if (arg=='new') { // restrict auth credentials
               if (who.username) return rply.json({err: "USER ALREADY EXISTS!"});
               // define a new user with given username, and info from body
-              let newuser = UsersDB.get('recipes','defaults').mergekeys({username: user});
-              UsersDB.chgIdentification(newuser,data.identification);
-              // only allow user to define password, default random if not provided
+              let newuser = UsersDB.get('recipes','defaults');  // status, authorizations,...
+              newuser.mergekeys({username: user, account:data.account, identification:data.identification});
+              // define local password only, default random if not provided
               UsersDB.chgLocalPW(newuser,(data.credentials||{}).local||makeUID());
               return UsersDB.createUser(newuser, (e,id)=>{
                 if (e) return rply.json({err: e.toString()});
@@ -296,8 +296,8 @@ module.exports = hbAuth = function hbAuth(options){
               if (!who.username) return rply.json({err: "NO SUCH USER EXISTS!"});
               if (!rqst.hbIsAuth({user:who.username})) return rply.json({err: "NOT AUTHORIZED!"});
               UsersDB.chgIdentification(who,data.identification);
-              // only allow user to re-define password, default random if not provided
-              UsersDB.chgLocalPW(who,(data.credentials||{}).local||makeUID());
+              // only allow user to re-define local password, default random if not provided
+              UsersDB.chgLocalPW(who,data.credentials.local||makeUID());
               return UsersDB.updateUser(who, (e,id)=>{
                 if (e) return rply.json({err: e.toString()});
                 scribe.debug('Account updated for user: %s',who.username); 
@@ -308,6 +308,7 @@ module.exports = hbAuth = function hbAuth(options){
             rply.json({err: 'NEW/CHANGE ACCOUNT REQUEST REQUIRED'});
             break;
           case 'activate':  // activate a user
+            if (!who.username) return rply.json({err: "NO SUCH USER EXISTS!"});
             switch (UsersDB.askStatus(who)) {
               case 'ACTIVE': return rply.json({msg:'ACCOUNT ACTIVATED!*'});
               case 'INACTIVE': return rply.json({msg:'ACCOUNT INACTIVE!'});
@@ -315,6 +316,7 @@ module.exports = hbAuth = function hbAuth(options){
                 if (!rqst.hbIsAuth({check:'challenge', code: arg, challenge: UsersDB.askChallenge(who)}))
                   return rply.json({msg: 'ACCOUNT ACTIVATION FAILED/EXPIRED!'}); 
                 UsersDB.chgStatus(who,'ACTIVE');
+                UsersDB.chgChallenge(who,{}); // remove challenge as one-time use!
                 UsersDB.updateUser(who,(e,id)=>{
                   if (e) return rply.json({err: err.toString()});
                   scribe.debug('Account activated for user: %s',who.username); 
@@ -326,20 +328,21 @@ module.exports = hbAuth = function hbAuth(options){
               };
             break;
           case 'admin': // update user data for a list of users
-            if (!rqst.hbIsAuth({admin:'*'})) next(401);
-            if (who.username) {
-              UsersDB.chgAuth(who,arg.asJx());
-              UsersDB.updateUser(who,(e,id)=>{
-                if (e) return rply.json({err: err.toString()});
-                rply.json({msg: 'User Authorization updated for '+who.username}); 
+            if (!rqst.hbIsAuth({admin:'ADMIN'})) return next(401);
+            if (arg=='list') 
+              UsersDB.listUsers((e,u)=>{
+                if (e) return rply.json({err: e.toString()});
+                rply.json({users: u});
                 });
-              } 
-            else {
-            UsersDB.backup();
-            UusersDB.groupChange(rqst.body.data,(e,msg)=>{rply.json(e ? {err:e.toString()} : {msg:msg})});
-              };
+            if (arg=='auth') {
+              UsersDB.authUsers(rqst.body||[],(e,id)=>{
+                if (e) return rply.json({err: e.toString()});
+                rply.json({msg: 'Users authorizations updated!...'}); 
+              });
+            };
             break;
           case 'code': // generate a user challenge; argument determines form
+            if (!who.username) return rply.json({err: "NO SUCH USER EXISTS!"});
             let chlg = {code: makeUID(arg), expires: rqst.hbSession.now+(opt.expires||10)*60};  // good for 10 minutes default
             UsersDB.chgChallenge(who,chlg);
             UsersDB.updateUser(who,(e,id)=>{
@@ -351,19 +354,22 @@ module.exports = hbAuth = function hbAuth(options){
               rply.json({msg: 'CHALLENGE CODE SENT TO: '+ p.number}); 
               });
             break;
-          case 'list': // list user auth credentials or ???
-            if (!rqst.hbIsAuth({admin:'*'})) next(401);
-            UsersDB.listUsers((e,u)=>{
-              if (e) return rply.json({err: e.toString()});
-              rply.json({users: u});
-              });
-            break;
           case 'login': // authenticate a user and return a unique session id
             if (Sessions.full()) return rply.json({err:'Max users exceeded, please try again later...'});
-            let hsid = (rqst.hbIsAuth({check:'login', user:who})) ? Sessions.add(who) : '';
-            let validIdentification = hsid ? UsersDB.askIdentification(who) : {};
-            let optService = hsid ? UsersDB.askAuth(who, arg) : '';
-            rply.json({hsid: hsid, user: validIdentification , auth: optService});
+            rqst.hbIsAuth({check:'login', user:who}).then((ok)=>{
+              scribe.trace("LOGIN OK: %s", ok);
+              if (!ok) return rply.json({err:'Login failed...'});
+              // success, remove challenge, add user to Sessions cache and return hsid and user identification result
+              if (ok=='once'){
+                UsersDB.chgChallenge(who,{}); // remove challenge as one-time use!
+                UsersDB.updateUser(who,(e,id)=>{
+                  if (e) scribe.error('Problem removing one-time challenge for user[%s]',who.username);
+                  });
+                }
+              let hsid =  Sessions.add(who);
+              scribe.debug("Successful login: %s (%s)", who.username,hsid);
+              rply.json({hsid:hsid, account:who.account, username:who.username, identification:UsersDB.askIdentification(who), authorizations:hsid?UsersDB.askAuth(who,arg):''});
+              }).catch((e)=>{console.log("caught:",e)});
             break;
           case 'logout':  // terminate a user's session if session ID (arg) matches username
             // must know user and hsid (arg) to prevent someone from logging out other cached users by username
@@ -377,34 +383,29 @@ module.exports = hbAuth = function hbAuth(options){
               };
             break;
           case 'reset': // reset a user's login password if challenge (arg) matches
-            if (rqst.hbIsAuth({check:'challenge', code: arg, challenge: UsersDB.askChallenge(who)})) {
-              UsersDB.chgLocalPW(who,crypto.plus.hash(who.username+arg)); // replace password
-              UsersDB.updateUser(who,(e,id)=>{
-                if (e) return rply.json({err: err.toString()});
-                scribe.debug('Password reset for user[%s]',who.username); 
-                rply.json({msg:'PASSWORD RESET'});
-                });
-              }
-            else {
-              rply.json({err:'PASSWORD CHALLENGE FAILED!'});
-              };
+            if (!rqst.hbIsAuth({check:'challenge', code: arg, challenge: UsersDB.askChallenge(who)})) 
+              return rply.json({err:'PASSWORD CHALLENGE FAILED!'});
+            if (rqst.hbSession.auth && rqst.hbSession.auth.hash)
+              return rply.json({err:'PASSWORD HASH NOT GIVEN!'});
+            UsersDB.chgLocalPW(who,rqst.hbSession.auth.hash); // replace password
+            UsersDB.chgChallenge(who,{}); // remove challenge as one-time use!
+            UsersDB.updateUser(who,(e,id)=>{
+              if (e) return rply.json({err: err.toString()});
+              scribe.debug('Password reset for user[%s]',who.username); 
+              rply.json({msg:'PASSWORD RESET'});
+              });
             break;
           default:  // no such user action; return error
             next(404);
           };
         });
       }
-    else if (rqst.method==='GET' && rqst.params.action) { // user form request
-      let [what,name,extra] = [rqst.params.rqrd1,rqst.params.rqrd2,rqst.params.opt1];;
-      switch (what) {
-        case 'form':
-          return rply.json({form: UsersDB.get('recipes','form',name)});
-        default:  // no such user data request; return error
-          next(404);
-        };
-      }
+///    else if (rqst.method==='GET' && rqst.params.rqrd1) { // user form request
+///      let [what,name,extra] = [rqst.params.rqrd1,rqst.params.rqrd2,rqst.params.opt1];;
+///      }
     else {
         return next();
       };
     };
-  };
+  }
+  ;

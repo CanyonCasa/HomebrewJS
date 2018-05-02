@@ -28,29 +28,37 @@ var Stat = (()=>{
     inc: (tag,key) => {
       Stat.set(tag,key,(Stat.get(tag,key)) ? Stat.get(tag,key)+1 : 1);
       return Stat.get(tag,key);
-    }
+    },
+    tags: () => Object.keys(stats),
+    keys: (tag) => Object.keys(stats[tag])
   };
 })();
 
 // homebrew localhost server for receiving commands/queries...
 var express = require('express');
 var app = express();
+var route = '/:action/:param?/:opt?';
 
-app.get('/:cmd/:key?/:value?',(req,res,next)=>{
-  let [cmd,key,value] = [req.params.cmd,req.params.key,req.params.value];
-  let msg = {err: false, cmd: cmd, key:key, value: value, msg:""};
-  switch (cmd) {
+app.get(route,(req,res,next)=>{
+  let [action,param,opt] = [req.params.action,req.params.param,req.params.opt];
+  let msg = {err: false, route: route, action: action, param:param, opt: opt, msg:""};
+  switch (action) {
     case 'CMD':
-      scribe.warn("Received command[%s]: %s",key,value);
-      events.emit(key||'',value);
-      msg:"Sent Event: " + key+ " " + value;
+      scribe.warn("Received command[%s]: %s",param,opt);
+      events.emit(param||'',opt);
+      msg.msg = "Sent Event: '" + param + "' with argument: '" + opt + "'";
       break;
     case 'STAT':
-      scribe.info("Received stats request[%s]: %s",key,value);
-      msg.stat = Stat.get(key,value)||{};
+      scribe.info("Received stats request[%s]: %s",param,opt);
+      msg.stat = Stat.get(param,opt)||{};
       break;
     case 'SCRIBE':
-      if (key=='mask') msg.scribe = scribe.setMasterMask(value);
+      if (param=='mask') msg.scribe = scribe.setMasterMask(opt);
+      msg.msg = opt ? "Scribe mask set to: "+opt : "Scribe mask restored!";
+      break;
+    case 'HELP':
+      msg.actions = ['/HELP','/CMD/<event>/<arg>','/STAT/<tag>/<key>','/SCRIBE/mask/<mask_level>'];
+      msg.events = Object.keys(events._events);
       break;
     default:
       msg.err = true; msg.msg = "BAD COMMAND!";
