@@ -20,6 +20,7 @@
 ///  Dependencies...
 ///************************************************************
 require("./Extensions2JS"); // dependency on Date stylings
+var sanitize = require('sanitize-html');
 
 var patterns = {
   alphanum: /^[a-zA-Z0-9]+$/,
@@ -48,56 +49,39 @@ var patterns = {
   zip: /^[0-9]{5}(?:-[0-9]{4})?$/
   };
 
-// used to parse HTML
-// content tags define tags for which the innnerHTML is included in the filtering
-/// 
-var htmlModes = {
-  chlorine: {
-    attributes: {
-      id:'selector', 
-      'class':'selector', 
-      style:'style',
-      title:'words'
+// used by sanitize-html to parse/filter HTML
+// exported to allow user defined filters called by setting the modifier to thier key, for example,
+// filter ['html','custom']
+var htmlFilters = {
+  relaxed: {
+    allowedTags: [ 'h3', 'h4', 'h5', 'h6', 'blockquote', 'p', 'a', 'ul', 'ol',
+      'nl', 'li', 'b', 'i', 'img', 'strong', 'em', 'strike', 'code', 'hr', 'br', 'div',
+      'table', 'thead', 'caption', 'tbody', 'tr', 'th', 'td', 'pre' ],
+    allowedAttributes: {
+      a: [ 'href', 'name', 'target' ],
+      div: ['id','class'],
+      img: [ 'src' ],
+      i: ['class'],
+      span: ['class']
       },
-    allowed: {
-      flags: ['hidden'],
-      attributes: ['id','class','style','title'],
-      tagDefault: {},
-      tags: ['address', 'article', 'aside', 'b', 'blockquote', 'br', 'caption', 'code', 'div', 'em', 'figcaption', 'figure', 
-             'footer', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr', 'i', 'li', 'main', 'object', 'ol', 'p', 'pre', 
-             'q', 'span', 'style', 'table', 'td', 'th', 'time', 'tr', 'u', 'ul']
-      },
-    tags: {
-      a: {action: 'strip'},
-      img: {action: 'strip', selfClose:true},
-      script: {action: 'strip'}
-      },  
-    },  
-  lysol: {
-    attributes: {
-      alt:'words',
-      id:'selector', 
-      'class':'selector', 
-      height:'style',
-      href: 'urlLocal|',
-      src: 'urlLocal|',
-      style:'style',
-      title:'words',
-      width:'style'
-      },
-    standard: {
-      flags: ['hidden'],
-      attributes: ['id','class','style','title'],
-      tagDefault: {},
-      tags: ['address', 'article', 'aside', 'b', 'blockquote', 'br', 'caption', 'code', 'div', 'em', 'figcaption', 'figure', 
-             'footer', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr', 'i', 'li', 'main', 'object', 'ol', 'p', 'pre', 
-             'q', 'span', 'style', 'table', 'td', 'th', 'time', 'tr', 'u', 'ul']
-      },
-    tags: {
-      a: {attributes: ['href']},
-      img: {attributes: ['src', 'alt', 'width', 'height']},
-      script: {attributes: ['src']}
-      }  
+    selfClosing: [ 'img', 'br', 'hr', 'area', 'base', 'basefont', 'input', 'link', 'meta' ],
+    allowedSchemes: [ 'http', 'https', 'ftp', 'mailto' ],
+    allowedSchemesByTag: {},
+    allowedSchemesAppliedToAttributes: [ 'href', 'src', 'cite' ],
+    allowProtocolRelative: true,
+    allowedIframeHostnames: ['www.youtube.com', 'player.vimeo.com']
+    },
+  strict: {
+    allowedTags: [ 'b', 'i', 'em', 'strong', 'a', 'img' ],
+    allowedAttributes: { 'a': ['href','target'], 'img': ['src'] }
+    },
+  strip: {
+    allowedTags: [],
+    allowedAttributes: []
+    },
+  unfiltered: {
+    allowedTags: false,
+    allowedAttributes: false
     }
   };
 
@@ -120,14 +104,13 @@ var stripHTML = function(unsafe) {
 
 // html sanitizer routine...
 function htmlSafe(html,mode) {
-  var error = null; var safeHTML = '';
   switch (mode) {
-    case 'escape': safeHTML = escHTML(html); break;
-    case 'encode': safeHTML = encodeURI(html); break;
-    case 'strip': safeHTML = stripHTML(unescHTML(html)); break;
-    default: 
+    case 'escape': return escHTML(html);
+    case 'encode': return encodeURI(html);
+    case 'sanitize': return sanitize(html);
+    default:
+      return sanitize(html,htmlFilters[mode])
     };
-  return safeHTML;
   };
 
 // simple regular expression pattern test ...
@@ -225,8 +208,9 @@ function jsonSafe(jx,filter) {
 };
 
 module.exports = {
-  patterns: patterns,
+  htmlFilters: htmlFilters,
   htmlSafe: htmlSafe,
+  patterns: patterns,
   rexSafe: rexSafe,
   scalarSafe: scalarSafe,
   jsonSafe: jsonSafe
