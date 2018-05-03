@@ -47,6 +47,7 @@ require('./Extensions2JS');
 const WrapSQ3 = require('./WrapSQ3');
 const Safe = require('./SafeJSON');
 const csv = require('./csv');
+const fs = require('fs');
 
 exports = module.exports = function data(options) {
   // this function called by express app to initialize middleware...
@@ -108,25 +109,36 @@ exports = module.exports = function data(options) {
               });
             };
           }
-        else if (rqst.method=='POST' || rqst.method=='PUT') {
+        else if (rqst.method=='POST' || rqst.method=='PUT' || rqst.method=='DELETE') {
           if ('path' in recipe) {
-            // file upload...
-            if (Object.keys(rqst.files||{}).length==0) return rply.json({err:'No files were uploaded.'});
-            let fp = [];
-            for (let f in rqst.files) {
-              let fObj = rqst.files[f];
-              fObj.location = [recipe.path,fObj.name].join('/');
-              scribe.trace("DATA UPLOAD[%s] <- ", rqst.params.recipe, fObj.location);
-              fp.push(fObj.mv(fObj.location).then((res,rej)=>{
-                }));
+            if (rqst.method=='DELETE') {
+              // remove file!
+              let file = Safe.scalarSafe(rqst.params.opt1,'filename');
+              scribe.trace("DATA DELETE[%s] <- ", rqst.params.recipe, file);
+              fs.unlink(recipe.path+'/'+file,e=>{
+                if (e) return rply.json({err:'Error removing file...', msg: e.toString()});
+                rply.json({msg: 'File removal complete!'})
+                });
+              }
+            else {
+              // file upload...
+              if (Object.keys(rqst.files||{}).length==0) return rply.json({err:'No files were uploaded.'});
+              let fp = [];
+              for (let f in rqst.files) {
+                let fObj = rqst.files[f];
+                fObj.location = [recipe.path,fObj.name].join('/');
+                scribe.trace("DATA UPLOAD[%s] <- ", rqst.params.recipe, fObj.location);
+                fp.push(fObj.mv(fObj.location).then((res,rej)=>{
+                  }));
+                };
+              Promise.all(fp).then(res=>{rply.json({msg: 'File uploading complete!'})})
+                .catch(e=>{rply.json({err:'Error uploading file...', msg: err.toString()})});
               };
-            Promise.all(fp).then(res=>{rply.json({msg: 'File uploading complete!'})})
-              .catch(e=>{rply.json({err:' Error uploading file...', msg: err.toString()})});
             }
           else {
-            // database store... query data in body, may be an object or array of objects
-            scribe.trace("DATA BODY[%s]: ",rqst.params.recipe, rqst.body.data);
-            db.store(recipe,rqst.body.data,
+            // database store... query data in body or params, may be an object or array of objects
+            scribe.trace("DATA POST[%s]: ",rqst.params.recipe, rqst.body.data, rqst.params);
+            db.store(recipe,rqst.body.data||rqst.params,
               function(err,metadata) {
                 if (err) return next(err);
                 rply.json(metadata); // list of inserted id values
