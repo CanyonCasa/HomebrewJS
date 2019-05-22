@@ -19,7 +19,7 @@ var quoteIf = x => isNaN(x) ? '"'+x.replace('"','""')+'"' : Number(x);
 var quote = v => v instanceof Array ? v.map(x=>quoteIf(x)) : quoteIf(v);
 
 // obj2csv function converts an array of JS objects into a csv string.
-// cfg provides convertion configuration info
+// cfg provides conversion configuration info
 //   cols: an array of col keys that determines the output order
 //   labels: an array of names for column labels, default cols.
 function obj2csv(obj,cfg) {

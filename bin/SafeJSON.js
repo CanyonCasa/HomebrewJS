@@ -115,7 +115,7 @@ function htmlSafe(html,mode) {
 
 // simple regular expression pattern test ...
 function rexSafe(data,pattern,dflt) {
-  var m=data.match(pattern);
+  var m=String(data).match(pattern);  // possible numeric values and strings
   return (m) ? m[0] : dflt!==undefined ? dflt : undefined;
   };
 
@@ -129,7 +129,7 @@ function rexSafe(data,pattern,dflt) {
 function scalarSafe(data,filter){
   var [pat,dflt] = (Array.isArray(filter)) ? filter : [filter];
   // if no data, except for date, return default
-  if ((data===undefined || data===null || data==='') && pat!='date') { return dflt||data; };
+  if ((data===undefined || data===null || data==='') && (pat!='date'&&pat!="choice")) { return dflt||data; };
   if (pat==='*') return data; // bypass, no filtering
   // begin checking data...
   // explicitly test pattern and data... 
@@ -164,8 +164,7 @@ function scalarSafe(data,filter){
       return 'html';
       break;
     default:
-      // only string or regex patterns should remain...
-      if (typeof data!='string') return dflt;
+      // only string or numerics should remain...
       // is it a predefined pattern?
       if (pat in patterns) return rexSafe(data,patterns[pat],dflt);
       // is it a regular expression?

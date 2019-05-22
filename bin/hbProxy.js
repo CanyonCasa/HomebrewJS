@@ -1,6 +1,6 @@
 /*
 proxy.js: reverse proxy server for multi-domain homebrew web server 
-(c)2018 Enchanted Engineering, Tijeras NM.
+(c)2019 Enchanted Engineering, Tijeras NM.
 
 proxy.js script defines a reverse proxy server for a small multi-domain NodeJS 
 homebrew web hosting service with custom routing logic that maps hostname to backend server.
@@ -26,9 +26,9 @@ var url = require('url');
 var Scribe = require('./Scribe');
 
 module.exports = Proxy = function Proxy(context) {
-  this.context = context;
-  this.tag = context.tag;
   this.cfg = context.cfg;
+  this.tag = context.tag;
+  this.context = context;
   this.scribe = new Scribe({tag:context.tag, parent: context.scribe}.mergekeys(context.cfg.scribe||{}));
   let ignore = (context.cfg.report||{}).ignore || ['192.168.0','127.0.0'];
   this.ignore = (typeof ignore=='string') ? [ignore] : ignore;
@@ -103,7 +103,7 @@ Proxy.prototype.SNICallback = function SNICallback() {
 // default generic reverse proxy callback...
 Proxy.prototype.router = function router() {
   var self = this;
-  this.proxy.on('error', (err) => {
+  this.proxy.on('error', (err,rqst,rply) => {
     self.scribe.error("Trapped internal proxy exception!:", err.toString());
     self.context.internals.Stat.inc(self.tag,'ERROR');
     try {
@@ -134,10 +134,10 @@ Proxy.prototype.router = function router() {
       if (!self.ignore.some(function(x){ return ip.match(x)})) {  
         // ignore diagnostics for local or specified addresses or nets
         let probes = self.context.internals.Stat.inc(self.tag,'probes');
-        self.scribe.warn("NO PROXY ROUTE[%d] %s->(%s): %s %s", probes, ip, host, method, url);
+        self.scribe.dump("NO PROXY ROUTE[%d] %s->(%s): %s %s", probes, ip, host, method, url);
         };
-      rply.writeHead(404, "Proxy Route Not Found!" ,{"Content-Type": "text/plain"});
-      rply.write("404: Proxy Route Not Found!");
+      rply.writeHead(410, "Gone" ,{"Content-Type": "text/plain"});
+      rply.write("410: NO Proxy Route!");
       rply.end();
       };
     };
@@ -149,7 +149,6 @@ Proxy.prototype.start = function start(callback) {
   if (this.secure!==undefined) {
     this.server = https.createServer(this.secure.options, callback||this.router());
     this.server.on('upgrade',(req,socket,head)=> {
-console.log('secure: ',req.headers,req.url);
       this.proxy.ws(req,socket,head);
       });
     this.server.listen(this.cfg.port);
@@ -158,7 +157,6 @@ console.log('secure: ',req.headers,req.url);
   else {  
     this.server = http.createServer(callback||this.router());
     this.server.on('upgrade',(req,socket,head)=> {
-console.log('insecure: ',req.headers);
       this.proxy.ws(req,socket,head);
       });
     this.server.listen(this.cfg.port);

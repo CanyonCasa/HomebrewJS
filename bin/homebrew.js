@@ -36,7 +36,7 @@ var scribe = new Scribe(cfg.scribe);
 scribe.info("Homebrew[%s] server setup in %s mode...", cfg.VERSION, process.env.NODE_ENV);
 
 //ensure clean exit on Ctrl-C...; pass cleanup callback
-require('./Cleanup')(()=>{scribe.streamToLog('',true)}); // adds process event handlers
+require('./Cleanup')(()=>{scribe.flush('...Transcript Closed')}); // adds process event handlers
 
 // dump the configuration for verbose debugging...
 scribe.dump("CONFIG: %s", JSON.stringify(cfg,null,2));
