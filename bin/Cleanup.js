@@ -1,36 +1,23 @@
 // Handles graceful application specific cleanup to avoid hung servers...
 
 var cleanup = {
-  // define a default callback reference to be overridden by application...
-  callback: null,
-  // flag to prevent circular calls.
-  called: false,
-  // define a function to call for graceful exiting...
+  callback: ()=>console.log("Graceful exit ..."), // default callback
+  called: false,  // flag to prevent circular calls.
   delay: 400,  
-  gracefulExit: function (code) {
+  gracefulExit: function (code=1) { // graceful exit call...
     if (!this.called) {
       this.called = true;
-      console.log("Graceful exit cleanup...");
-      if (this.callback) this.callback();   // do app specific cleaning once before exiting
-      code = (code!==undefined) ? code : 1; // assume non-zero (i.e. error) if not explicit
-      setTimeout(function() {process.exit(code);},this.delay);  // no stopping!
-      };
-    }
-  };
+      this.callback();  // do app specific cleaning once before exiting
+      setTimeout(process.exit,this.delay,code);  // no stopping!
+    };
+  }
+};
 
-// clean exit test...
-process.on('beforeExit',
-  function () {
-    cleanup.gracefulExit(0);
-    }
-  );
+// catch clean exit ...
+process.on('beforeExit', function () { cleanup.gracefulExit(0); });
 
 // catch ctrl+c event and exit gracefully
-process.on('SIGINT', 
-  function () {
-    cleanup.gracefulExit(2);
-    }
-  );
+process.on('SIGINT', function () { cleanup.gracefulExit(2); });
 
 //catch uncaught exceptions, trace, then exit gracefully...
 process.on('uncaughtException', 
@@ -38,11 +25,7 @@ process.on('uncaughtException',
     console.log('Uncaught Exception...');
     console.log(e.stack);
     cleanup.gracefulExit(99);
-    }
-  );
+  }
+);
 
-
-module.exports = init = function init(cb=null) {
-  cleanup.callback = cb;
-  return cleanup;
-  };
+module.exports = init = (cb)=>{cleanup.callback=cb||null; return cleanup;};
