@@ -2,6 +2,7 @@
 // Provides hooks for notifying users via email and text messaging
 // Attached as functions sendMail and sendText of rqst.hb object.
 
+const twilio = require('twilio');
 require('./Extensions2JS');
 var email = require('emailjs');
 const Scribe = require('./Scribe');
@@ -38,7 +39,7 @@ var sendMail = function (mail,callback) {
   };
   
 // callback to send text message attached to request object...
-var sendText = function (msg,callback) {
+var sendTextByEmail = function (msg,callback) {
   // set required defaults and override as defined by msg...
   var sms = {}.mergekeys(cfg.esms.defaults).mergekeys(msg);
   if (sms.time) sms.text = '[' + (new Date().style('isoDateTime'))+']:\n' + sms.text;
@@ -52,6 +53,46 @@ var sendText = function (msg,callback) {
     sendMail(sms, callback);
     }
   catch(e) { 
+    scribe.error("sendTextBtyEmail failure: %s",e.toString());
+    if (callback) callback(e); 
+    };
+  };
+
+// callback to send text message attached to request object...
+var sendText = function (msg,callback) {
+  const prefix = (n)=>(String(n).startsWith('+1')? n:'+1'+n); // function to prefix numbers with +1
+  // set required defaults and override as defined by msg...
+  var sms = {}.mergekeys(cfg.sms.defaults).mergekeys(msg);
+  // format optional message header...
+  sms.id = sms.id || cfg.sms.twilio.name || '';
+  sms.time = sms.time ? '['+(new Date().style('isoDateTime'))+']' : '';
+  sms.body = (sms.hdr || ((sms.id||sms.time) ? sms.id+sms.time+':\n' : '')) + sms.text;
+  // group, to or defaults.to may by a number or array of numbers
+  sms.group = (sms.group || sms.to || sms.defaults.to).toString().split(','); // force array, even if one number.
+  try {
+    const twilioClient = twilio(cfg.sms.twilio.accountSID,cfg.sms.twilio.authToken);
+    Promise
+      .all(
+        sms.group.map(who=> {
+          var number = (typeof who=='object') ? who.number:who;
+          scribe.debug('TWILIO SMS QUEUE[%s]: %s', number, sms.body.replace('/\n/g',' '));
+          return twilioClient.messages.create({
+            to: prefix(number),
+            from: cfg.sms.twilio.messagingService,
+            body: sms.body
+            })
+          })
+        )
+      .then(messages => { 
+        scribe.debug('TWILIO SMS: sent %d messages', messages.length);
+        if (callback) callback(null,{sms: sms, messages:messages});
+        })
+      .catch(e => {
+        scribe.error("sendText failure: %s",e.toString());
+        if (callback) callback(e); 
+        });
+    }
+  catch(e) { 
     scribe.error("sendText failure: %s",e.toString());
     if (callback) callback(e); 
     };
@@ -61,8 +102,8 @@ var sendText = function (msg,callback) {
 var sendWare = function(options) {
   scribe.debug('Middleware for notify loaded...');
   return function sendMiddleware(rqst, rply, next) {
-    let action = rqst.params.send;
-    let msg = rqst.body.msg;
+    let action = rqst.params.send||'';
+    let msg = rqst.body.msg||{};
     if (!rqst.hbIsAuth({send:'WRITE'})) return next (401);
     scribe.trace('Notify[%s] => %s',action,msg.asJx());
     /// need to filter message?
@@ -89,9 +130,14 @@ var init = function init(options) {
     scribe.info("Notification EMAIL support initialized...");
     if (cfg.esms && cfg.esms.gateways) {
       enabled.text = true;
-      actions.sendText = sendText;
+      actions.sendTextByEmail = sendTextByEmail;
       actions.providers = Object.keys(cfg.esms.gateways);
       scribe.info("Notification SMS support initialized...");
+      };
+    if (cfg.sms) {
+      enabled.text = true;
+      actions.sendText = sendText;
+      scribe.info("Notification Twilio SMS support initialized...");
       };
     };
   actions.sendWare = sendWare;

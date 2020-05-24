@@ -36,7 +36,7 @@ var scribe = new Scribe(cfg.scribe);
 scribe.info("Homebrew[%s] server setup in %s mode...", cfg.VERSION, process.env.NODE_ENV);
 
 //ensure clean exit on Ctrl-C...; pass cleanup callback
-require('./Cleanup')(()=>{scribe.flush('Graceful exit ... closing transcript')}); // adds process event handlers
+require('./Cleanup')(()=>{scribe.flush('... Closing transcript')}); // adds process event handlers
 
 // dump the configuration for verbose debugging...
 scribe.dump("CONFIG: %s", JSON.stringify(cfg,null,2));
@@ -120,4 +120,4 @@ for (var p of cfg.proxies) {
   proxies[p].start();
   };
 
-scribe.info("Homebrew setup complete...");
+services.notify.sendText({text:"Homebrew Server started on host "+cfg.host},function(){scribe.info("Homebrew setup complete...")});

@@ -115,7 +115,7 @@ function htmlSafe(html,mode) {
 
 // simple regular expression pattern test ...
 function rexSafe(data,pattern,dflt) {
-  var m=String(data).match(pattern);  // possible numeric values and strings
+  var m=String(data).match(pattern);  // data could be numerical value, so force string
   return (m) ? m[0] : dflt!==undefined ? dflt : undefined;
   };
 
@@ -164,10 +164,8 @@ function scalarSafe(data,filter){
       return 'html';
       break;
     default:
-      // only string or numerics should remain...
-      // is it a predefined pattern?
+      // only predefined pattern or regex patterns should remain...
       if (pat in patterns) return rexSafe(data,patterns[pat],dflt);
-      // is it a regular expression?
       if (pat[0]==='/') {
         var rex = new RegExp(pat.slice(1,pat.last('/')),pat.slice(pat.last('/')+1));
         return rexSafe(data,rex,dflt); 

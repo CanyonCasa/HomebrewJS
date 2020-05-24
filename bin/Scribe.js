@@ -22,15 +22,16 @@ const frmt = require('util').format;  // returns same result as console.log for 
 
 // precedence order of transcript calls; level passes all messages equal to or greater in rank...
 var level = {
-  dump:  {txt: "DUMP ", rank: 0},  // transcript only
   trace: {txt: "TRACE", rank: 1, style: ['magenta','bold']},
   debug: {txt: "DEBUG", rank: 2, style: ['cyan','bold']},
-  log:   {txt: "LOG  ", rank: 3, style: ['white']},
+  log:   {txt: "LOG  ", rank: 3, style: ['white','bold']},
   info:  {txt: "INFO ", rank: 4, style: ['green']},
   warn:  {txt: "WARN ", rank: 5, style: ['yellow','bold']},
   error: {txt: "ERROR", rank: 6, style: ['red','bold']},
   fatal: {txt: "FATAL", rank: 7, style: ['redBG','white','bold']},
   flush: {txt: "FLUSH", rank: 8, style: ['cyanBG','black']}, // 'flush' always writes transcript
+  note:  {txt: "NOTE ", rank: 9, style: ['gray']},  // formatted console logging only
+  dump:  {txt: "DUMP ", rank: 9}  // transcript only, no style used
 };
 
 // color styling function (applys only to console)...
@@ -83,7 +84,9 @@ Scribe.prototype.streamToTranscript =  function streamToTranscript(line,flush) {
   };
   if (this.transcript.file) { // instance level transcripting if its log file defined...
     this.transcript.buffer += line+((flush)?'\n':''); // extra linefeed if flushing to "paginate" log file.
-    if ((this.transcript.buffer.length>this.transcript.bsize) || flush) this.saveTranscript(flush);
+    if ((this.transcript.buffer.length>this.transcript.bsize) || flush) {
+      this.saveTranscript(flush);
+    };
   };
   // otherwise scripting not saved to transcript file!
 };
@@ -94,15 +97,14 @@ Scribe.prototype.write = function write(style,msg) {
   let stamp = new Date().toLocaleString();
   // only log or transcript to requested level of detail; mask may be dynamically assigned between calls
   let mask = this.mask || (this.parent||{}).mask || 'log';
-  if (level[style].rank>=level[mask].rank || style=='dump') {
+  if (level[style].rank>=level[mask].rank) {
     if (style!='dump') console.log(asStyle(style,[stamp,level[style].txt,this.prompt,msg].join(' ')));
-    this.streamToTranscript([stamp,level[style].txt,this.tag,msg].join('|')+'\n',(style==='fatal'||style==='flush'));
+    if (style!='post') this.streamToTranscript([stamp,level[style].txt,this.tag,msg].join('|')+'\n',(style==='fatal'||style==='flush'));
   };
 };
 
 // message transcripting calls from lowest to highest priority...
 Scribe.prototype.raw = console.log; // console pass through only
-Scribe.prototype.dump = function () { this.write('dump',frmt.apply(this,arguments)); }; // only write to transcript
 Scribe.prototype.trace = function () { this.write('trace',frmt.apply(this,arguments)); };
 Scribe.prototype.debug = function () { this.write('debug',frmt.apply(this,arguments)); };
 Scribe.prototype.log = function () { this.write('log',frmt.apply(this,arguments)); };
@@ -111,6 +113,8 @@ Scribe.prototype.warn = function () { this.write('warn',frmt.apply(this,argument
 Scribe.prototype.error = function () { this.write('error',frmt.apply(this,arguments)); };
 Scribe.prototype.fatal = function () { this.write('fatal',frmt.apply(this,arguments)); process.exit(100);};
 Scribe.prototype.flush = function () { this.write('flush',frmt.apply(this,arguments)); }; // always write transcript
+Scribe.prototype.note = function () { this.write('note',frmt.apply(this,arguments)); }; // only write to console
+Scribe.prototype.dump = function () { this.write('dump',frmt.apply(this,arguments)); }; // only write to transcript
 
 Scribe.prototype.styleAs = function (lvl='log',style='restore') {
   level[lvl].restore = (level[lvl].restore!==undefined) ? level[lvl].restore : level[lvl].style;

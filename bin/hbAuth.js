@@ -129,6 +129,7 @@ var UsersDB = (()=>{
   var recipes;
   var getUser = (username,cb) => {hDB.find(recipes.user,{username:username},cb);};
   var obj = (x,y,z)=> y ? ( z ? ((x||{})[y]||{})[z]||{} : (x||{})[y]||{}) : x||{};
+  var prop = (dflt,obj,...keys) => (keys[0] ? ((obj instanceof Object && keys[0] in obj) ? prop(dflt,obj[keys[0]],...keys.slice(1)) : dflt) : obj);
   var objs ={hDB: hDB, recipes: recipes};
   return {
     get: (x,y,z) => obj(x=='hDB'?hDB:recipes,y,z),
@@ -144,7 +145,7 @@ var UsersDB = (()=>{
     askCredentials: (who) => obj(who,'credentials'),
     askIdentification: (who) => obj(who,'identification'),
     askLocalPW: (who) => obj(who,'credentials')['local']||'',
-    askPhone: (who) => obj(who,'identification','phone'),
+    askPhone: (who) => prop('',who,'identification','phone','number')||prop('',who,'identification','phone'),
     askStatus: (who,state) => state ? (obj(who).status===state) : obj(who).status,
     authUsers: (data,cb) => {hDB.store(recipes.auth,data,cb);},
     backup: () => {hDB.backup();},
@@ -173,7 +174,7 @@ var isAuth = function isAuth(auth={}){
   //console.log("isAuth:",this.hbSession,auth);
   var test = {};
   switch (auth.check) { // auth = {check:'...', ...} holds given login/api parameters to test
-    case 'login':   // local login authentication for auth.user against session auth credentials
+    case 'login':       // local login authentication for auth.user against session auth credentials
       return new Promise((resolve,reject)=>{
         if (!UsersDB.askStatus(auth.user,'ACTIVE')) return resolve(false);
         let query = (this.hbSession.auth||{}).hash||'';  // recovered credentials to query against account
@@ -184,7 +185,7 @@ var isAuth = function isAuth(auth={}){
         if (local && query) return bcrypt.compare(query,local).then((ok)=>{resolve(ok)});
         return resolve(false);
         });
-    case 'challenge':     // authenticate auth.code against auth.challenge
+    case 'challenge':   // authenticate auth.code against auth.challenge
       return (auth.code===auth.challenge.code && auth.challenge.expires>this.hbSession.now);
     case 'api':     // authenticate API hash
       test = this.hbSession.api;  // session api should hold given api parameters to test
@@ -194,18 +195,19 @@ var isAuth = function isAuth(auth={}){
         // note api not removed from cache as it's always treated as an available user
         };
       break;
-    default:        // check authorization , i.e auth={service:requested_access}
-      if (Object.keys(auth).length!==1) return false; // check involves only a single key!
-      let service = Object.keys(auth)[0];
-      let access = auth[service];
-      // if service defined as user, check if value matches authenticated user or validated user
-      if (service==='user' && access=='') return ('id' in this.hbSession);  // id validated when defined!
-      if (service==='user') return ((this.hbSession.user||{}).username==access);
-      // get user permission for this service; default to allow...
-      let permission = UsersDB.askAuth(this.hbSession.user||{},service)||'';
-      let rank = ['DENY','READ','WRITE','ADMIN'];   // DENY (index=-1), ALLOW (no check), READ only, WRITE permitted, ADMIN
-      // check if granted permission 'equals or exceeds' required access; NOTE: access level of OPEN (index=-1) always returns true!
-      return (rank.indexOf(permission)>=rank.indexOf(access));
+    default:            // check authorization , i.e auth={service:requested_access}, 1 or more services
+      if (Object.keys(auth).length==0) return false; // check requires at least one service key!
+      // if 'user' service, check if value matches authenticated user or simply a validated user, i.e. id exists in session
+      if ('user' in auth) return (auth[user]=='') ? ('id' in this.hbSession): ((this.hbSession.user||{}).username==auth[user]);
+      let rank = ['READ','WRITE','ADMIN'];   // DENY (index=-1), READ only, WRITE permitted, ADMIN control
+      let services = Object.keys(auth);
+      // allow access if user meets any permission setting for service(s)
+      return services.some(s=>{
+        let access = auth[s]; // required level of permission to access this service
+        let permission = UsersDB.askAuth(this.hbSession.user||{},s)||'';  // level of permission granted to user for this service
+        // check if granted permission 'equals or exceeds' required access; NOTE: access level of OPEN (index=-1) always returns true!
+        return (rank.indexOf(permission)>=rank.indexOf(access));
+        });
     };
   };
 
@@ -347,11 +349,11 @@ module.exports = hbAuth = function hbAuth(options){
             UsersDB.chgChallenge(who,chlg);
             UsersDB.updateUser(who,(e,id)=>{
               if (e) return rply.json({err: err.toString()});
-              let p = UsersDB.askPhone(who);
-              let msg = {text: 'Challenge Code: '+chlg.code, time: true, provider: p.provider, to: p.number};
+              let phone = UsersDB.askPhone(who);
+              let msg = {text: 'Challenge Code: '+chlg.code, time: true, to: phone};
               site.services.notify.sendText(msg);
               scribe.debug('Challenge set for user[%s]: %s', who.username, chlg.code); 
-              rply.json({msg: 'CHALLENGE CODE SENT TO: '+ p.number}); 
+              rply.json({msg: 'CHALLENGE CODE SENT TO: '+ phone}); 
               });
             break;
           case 'login': // authenticate a user and return a unique session id
@@ -369,7 +371,7 @@ module.exports = hbAuth = function hbAuth(options){
               let hsid =  Sessions.add(who);
               scribe.debug("Successful login: %s (%s)", who.username,hsid);
               rply.json({hsid:hsid, account:who.account, username:who.username, identification:UsersDB.askIdentification(who), authorizations:hsid?UsersDB.askAuth(who,arg):''});
-              }).catch((e)=>{console.log("caught:",e)});
+              }).catch((e)=>{console.error("caught:",e)});
             break;
           case 'logout':  // terminate a user's session if session ID (arg) matches username
             // must know user and hsid (arg) to prevent someone from logging out other cached users by username

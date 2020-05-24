@@ -49,6 +49,15 @@ const Safe = require('./SafeJSON');
 const csv = require('./csv');
 const fs = require('fs');
 
+function saveFile(name,contents) {
+  return new Promise((resolve, reject) => {
+    fs.writeFile(name, contents, function (err, data) {
+      if (err) return reject(err);
+      resolve(data);
+    });
+  })
+};
+
 exports = module.exports = function data(options) {
   // this function called by express app to initialize middleware...
   var site = this;          // local reference for context
@@ -94,11 +103,11 @@ exports = module.exports = function data(options) {
             }
           else {
             // database find... query params may be in URL or querystring
-            scribe.trace("DATA PARAMS[%s]: ",rqst.params.recipe, rqst.params);
+            scribe.trace("DATA PARAMS[%s]: ",rqst.params.recipe, rqst.params.asJx());
             db.find(recipe,{}.mergekeys(rqst.params).mergekeys(rqst.query),
               function(err,found) {
                 if (err) return next(err);
-                scribe.trace("DATA DATA[%s]: FOUND!",rqst.params.recipe);
+                scribe.trace("DATA RECIPE[%s]: FOUND!",rqst.params.recipe);
                 if ('csv' in recipe) {
                   rply.set('Content-Type', 'text/csv');
                   rply.send(csv.obj2csv(found,recipe.csv)); 
@@ -121,23 +130,41 @@ exports = module.exports = function data(options) {
                 });
               }
             else {
-              // file upload...
-              if (Object.keys(rqst.files||{}).length==0) return rply.json({err:'No files were uploaded.'});
-              let fp = [];
-              for (let f in rqst.files) {
-                let fObj = rqst.files[f];
-                fObj.location = [recipe.path,fObj.name].join('/');
-                scribe.trace("DATA UPLOAD[%s] <- ", rqst.params.recipe, fObj.location);
-                fp.push(fObj.mv(fObj.location).then((res,rej)=>{
-                  }));
+              // file(s) upload...
+              ///console.log("body:",rqst.body);
+              if ('files' in rqst.body) {
+                let fp = [];
+                for (let f in rqst.body.files) {
+                  /// TBD, does not handle storing multiple files to multiple locations!
+                  //console.log("site:",site);
+                  console.log("recipe:",recipe);
+                  console.log("file:",f);
+                  let fObj = rqst.body.files[f];
+                  console.log("file Object:",Object.keys(fObj));
+                  fObj.location = recipe.location=='root' ? site.cfg.root: site.cfg.restricted; /// NOTE: site.cfg.restricted presently not defined!!!
+                  console.log("location:",recipe, fObj.location);
+                  fObj.location += [recipe.path,fObj.name].join('/');
+                  console.log("location*:",fObj.location);
+                  var contents = (recipe.format=='base64') ?  new Buffer(fObj.contents.split(',')[1],'base64') : fObj.contents;
+                  ///console.log("saveFile:",saveFile);
+                  fp.push(saveFile(fObj.location,contents));
+                  ///fp.push(saveFile(fObj.location,contents).then((res,rej)=>{}));
+                  scribe.trace("DATA UPLOAD[%s] <- ", rqst.params.recipe, fObj.location);
+                  ///fp.push(fObj.mv(fObj.location).then((res,rej)=>{
+                  ///  }));
+                  };
+                Promise.all(fp).then(res=>{rply.json({msg: 'File uploading complete!'})})
+                  .catch(e=>{rply.json({err:'Error uploading file...', msg: err.toString()})});
+              } else {
+                rply.json({err:'Error uploading file - no files specified'});
                 };
-              Promise.all(fp).then(res=>{rply.json({msg: 'File uploading complete!'})})
-                .catch(e=>{rply.json({err:'Error uploading file...', msg: err.toString()})});
               };
+              
+              ///if (Object.keys(rqst.files||{}).length==0) return rply.json({err:'No files were uploaded.'});
             }
           else {
             // database store... query data in body or params, may be an object or array of objects
-            scribe.trace("DATA POST[%s]: ",rqst.params.recipe, rqst.body.data, rqst.params);
+            scribe.trace("DATA %s[%s]: ",rqst.method,rqst.params.recipe, rqst.body.data, rqst.params);
             db.store(recipe,rqst.body.data||rqst.params,
               function(err,metadata) {
                 if (err) return next(err);

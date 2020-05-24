@@ -548,29 +548,34 @@ WrapSQ3.prototype.find = function find(recipe,data,callback) {
 
 // convenience method to retrieve authorized data
 WrapSQ3.prototype.store = function store(recipe,data,callback) {
-  var self = this;
-  var thisDB = this.db;
   if (data===undefined) return callback(null,[]); // no data found means no actions
+  var self = this;
   // always treat as a block of INSERT/UPDATE/DELETE actions with data being an array of params
   // querys involving multiple params would therefore need to be an array of objects
   data = (Array.isArray(data)) ? data : [data]; // so wrap objects for singular queries as array
   recipe.meta = []; // return metadata
-  thisDB.serialize(function() {
-    let stmt = thisDB.prepare(recipe.sql);
-    let serr = null;
-    for (let d=0;d<data.length;d++) {
-      // filter data, translate JSON, and order params 
-      let px = (recipe.filter) ? Safe.jsonSafe(data[d],recipe.filter) : data[d];
-      for (let j of recipe.json||[]) { if (j in px) px[j] = px[j].asJx(recipe.pretty); };
-      px = (recipe.order) ? px.orderBy(recipe.order) : px;
-      self.logger(printableQuery({sql:recipe.sql,params:px}));
-      stmt.run(px,function(err){
-        // lastID valid only for INSERT statements
-        if (err) { serr = err; } else { recipe.meta.push([this.lastID,this.changes]); };
+  self.db.serialize(function() {
+    let stmt = self.db.prepare(recipe.sql, function(err) {
+      if (err) {
+        self.logger(err.message);
+        return callback(err,recipe.meta);
+        };
+      let serr = null;
+      for (let d=0;d<data.length;d++) {
+        // filter data, translate JSON, and order params 
+        let px = (recipe.filter) ? Safe.jsonSafe(data[d],recipe.filter) : data[d];
+        for (let j of recipe.json||[]) { if (j in px) px[j] = px[j].asJx(recipe.pretty); };
+        px = (recipe.order) ? px.orderBy(recipe.order) : px;
+        self.logger(printableQuery({sql:recipe.sql,params:px}));
+        stmt.run(px,function(err){
+          // lastID valid only for INSERT statements
+          if (err) { serr = err; } else { recipe.meta.push([this.lastID,this.changes]); };
+          });
+        };
+      stmt.finalize(function(err) {
+        callback(err||serr,recipe.meta);
         });
-      };
-    stmt.finalize(function(err) {
-      callback(err||serr,recipe.meta);
       });
+      
     });
   };
