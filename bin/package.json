@@ -1,0 +1,31 @@
+{
+  "name": "homebrewjs",
+  "version": "1.0.0",
+  "description": "Homebrew NodeJS server",
+  "main": "homebrew,js",
+  "dependencies": {
+    "lodash.mergewith": "^4.6.2",
+    "postcss": "^7.0.35",
+    "sanitize-html": "^1.27.5",
+    "xtend": "^4.0.2"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CanyonCasa/HomebrewJS.git"
+  },
+  "keywords": [
+    "homebrew",
+    "nodejs",
+    "node"
+  ],
+  "author": "CanyonCasa",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/CanyonCasa/HomebrewJS/issues"
+  },
+  "homepage": "https://github.com/CanyonCasa/HomebrewJS#readme"
+}
