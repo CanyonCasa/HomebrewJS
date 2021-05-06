@@ -6,7 +6,7 @@
   "dependencies": {
     "lodash.mergewith": "^4.6.2",
     "postcss": "^7.0.35",
-    "sanitize-html": "^1.27.5",
+    "sanitize-html": "^2.3.2",
     "xtend": "^4.0.2"
   },
   "devDependencies": {},
