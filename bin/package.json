@@ -5,7 +5,7 @@
   "main": "homebrew,js",
   "dependencies": {
     "lodash.mergewith": "^4.6.2",
-    "postcss": "^7.0.35",
+    "postcss": "^8.5.10",
     "sanitize-html": "^2.12.1",
     "xtend": "^4.0.2"
   },
